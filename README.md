@@ -76,4 +76,27 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 
 ## Setup
 
-_Setup instructions will be added as components are built._
+Requires Python 3.11 and PostgreSQL 15+ (developed on 18). All commands run from the repo root in PowerShell.
+
+```powershell
+# 1. Virtual environment and dependencies
+& 'C:\Program Files\Python311\python.exe' -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 2. Config: copy the template, then fill in the database password etc.
+Copy-Item .env.example .env
+
+# 3. Create / update the database tables
+.\.venv\Scripts\alembic.exe upgrade head
+
+# 4. Seed one admin, one farmer and one sensor node (safe to re-run)
+.\.venv\Scripts\python.exe -m tools.seed
+
+# 5. Run the tests (uses TEST_DATABASE_URL, never the real database)
+.\.venv\Scripts\python.exe -m pytest
+
+# 6. Start the API, then open http://127.0.0.1:8000/health
+.\.venv\Scripts\python.exe -m uvicorn backend.app:app --reload
+```
+
+The database user and the two databases (`blight_ews`, `blight_ews_test`) are created once by hand with `psql` as the `postgres` superuser.
