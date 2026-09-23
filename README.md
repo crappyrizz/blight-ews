@@ -17,6 +17,7 @@ The farmer grows the Shangi variety, prefers SMS, has a smartphone, and has weak
    - A "Hutton period" = two consecutive Hutton days (flagged on the second day).
    - Days with fewer than 20 of 24 hourly values are "insufficient" (null), never False.
    - Gaps are flagged, never interpolated.
+   - **Missing data policy.** An unjudged day is still written as a row (`status='insufficient_data'` or `'no_data'`, `score=NULL`, `valid_hours` set), so a gap shows up as a gap in the history. 0.0 is never substituted for an unknown day: 0.0 claims conditions do not favour blight, which missing data cannot support, and the dashboard and the model would both read it as a safe day. Downstream: the dashboard shows "No reading" / "Incomplete data (N of 24 hours)", never "Low risk"; alerts never send a low-risk message from an unjudged day and never let one clear a standing warning; fusion falls back to the most recent `status='ok'` day within 3 days (recording which date) and otherwise uses the neutral prior r=0.5 and says so; the learned model drops unjudged target days instead of treating them as negatives, and carries a `gap_in_window` feature.
 3. **Learned risk model**: forecasts whether Hutton conditions will occur in the next 24h / 48h at the plot. It forecasts infection-favourable WEATHER, not blight itself. Benchmarked against persistence, climatology and Hutton-on-forecast baselines.
 4. **CNN**: MobileNetV2 transfer learning on the PlantVillage potato subset (classes: `early_blight`, `late_blight`, `healthy`), exported to TFLite, run SERVER-SIDE by the backend.
 5. **Fusion**: the risk score r in [0,1] shifts the CNN's late-blight confidence threshold:
@@ -55,7 +56,7 @@ docs/      evaluation outputs (tables/figures) for Chapter 5
 - **sensor_nodes**(node_id PK, farmer_id FK, location, latitude, longitude, last_sync_time)
 - **sensor_readings**(reading_id PK, node_id FK, temperature, humidity, leaf_wetness NULLABLE, timestamp; UNIQUE(node_id, timestamp))
 - **weather_readings**(weather_id PK, latitude, longitude, source ['archive'|'historical_forecast'|'forecast'], timestamp, temperature, humidity, forecast_issued_at NULLABLE; UNIQUE(source, latitude, longitude, timestamp, forecast_issued_at))
-- **risk_scores**(score_id PK, node_id FK, method ['hutton'|'learned'], data_source ['sensor'|'api'], horizon_hours [0|24|48], score FLOAT 0-1, hutton_day BOOL NULL, hutton_period BOOL NULL, model_version NULL, for_date DATE, computed_at)
+- **risk_scores**(score_id PK, node_id FK, method ['hutton'|'learned'], data_source ['sensor'|'api'], horizon_hours [0|24|48], status ['ok'|'insufficient_data'|'no_data'], score FLOAT 0-1 NULLABLE, valid_hours INT NULL, hutton_day BOOL NULL, hutton_period BOOL NULL, model_version NULL, for_date DATE, computed_at)
 - **leaf_images**(image_id PK, farmer_id FK, file_path, capture_date)
 - **diagnosis_results**(result_id PK, image_id FK UNIQUE, disease_label, confidence, probabilities JSON, risk_score_used FLOAT, threshold_used FLOAT, risk_level ['low'|'medium'|'high'], late_blight_flagged BOOL, timestamp)
 - **reading_contributions**(reading_id FK, result_id FK, composite PK)

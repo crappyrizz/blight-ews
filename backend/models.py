@@ -121,6 +121,17 @@ class RiskScore(Base):
         CheckConstraint("data_source IN ('sensor', 'api')", name="ck_risk_scores_data_source"),
         CheckConstraint("horizon_hours IN (0, 24, 48)", name="ck_risk_scores_horizon_hours"),
         CheckConstraint("score >= 0 AND score <= 1", name="ck_risk_scores_score_range"),
+        CheckConstraint(
+            "status IN ('ok', 'insufficient_data', 'no_data')",
+            name="ck_risk_scores_status",
+        ),
+        # A score exists if and only if the day is usable. This stops anyone
+        # writing a number for a day we could not measure, or leaving a
+        # usable day without a score.
+        CheckConstraint(
+            "(status = 'ok') = (score IS NOT NULL)",
+            name="ck_risk_scores_score_matches_status",
+        ),
     )
 
     score_id: Mapped[str] = mapped_column(ID, primary_key=True, default=id_default(ids.RISK_SCORE))
@@ -128,9 +139,19 @@ class RiskScore(Base):
     method: Mapped[str] = mapped_column(String(10))
     data_source: Mapped[str] = mapped_column(String(10))
     horizon_hours: Mapped[int] = mapped_column(Integer)  # 0 = today, 24 / 48 = forecast
-    score: Mapped[float] = mapped_column(Float)  # 0..1
-    # Null means "insufficient data" (fewer than 20 of 24 hourly values),
-    # which is deliberately different from False.
+    # 'ok'                = the day had enough data to judge
+    # 'insufficient_data' = some hours arrived, but fewer than 20 of 24
+    # 'no_data'           = no hourly values at all
+    status: Mapped[str] = mapped_column(String(20))
+    # NULL whenever status is not 'ok'. We deliberately do NOT store 0.0 for an
+    # unknown day: 0.0 means "conditions do not favour blight", a claim we
+    # cannot make from missing data, and both the dashboard and the learned
+    # model would read it as a genuinely safe day.
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 0..1
+    # How many of the 24 hourly values were present. NULL for rows that are
+    # not built from hourly data (e.g. a forecast from the learned model).
+    valid_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Null means "unknown", which is deliberately different from False.
     hutton_day: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     hutton_period: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     model_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
