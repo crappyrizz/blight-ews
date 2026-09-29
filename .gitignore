@@ -22,8 +22,23 @@ htmlcov/
 !.env.example
 
 # --- Data (raw weather, images, uploads) ---
+# Data files are ignored, with three exceptions that must be committed for the
+# work to be reproducible: the train/val/test split CSVs, the field-image
+# folder structure, and the field-image metadata.
 data/*
 !data/.gitkeep
+
+!data/splits/
+data/splits/*
+!data/splits/*.csv
+
+!data/field_images/
+data/field_images/*
+!data/field_images/.gitkeep
+!data/field_images/metadata.csv
+!data/field_images/*/
+data/field_images/*/*
+!data/field_images/*/.gitkeep
 
 # --- Model artefacts (large binaries; labels.txt stays tracked) ---
 models/*.joblib

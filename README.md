@@ -110,6 +110,44 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 - Raw responses are also written to `data/weather/*.csv` (gitignored) for inspection.
 - **`forecast_issued_at` stays null.** The historical forecast API is a continuous series stitched from the first hours of successive model runs and exposes no per-hour issue time. A true fixed-lead-time forecast needs the Previous Runs API (`*_previous_day1/2`, archived from 2024) or the Single Runs API (`&run=`).
 
+## Data preparation and documentation
+
+```powershell
+.\dev.ps1 prepare-images          # PlantVillage potato export + data/splits/*.csv
+.\dev.ps1 register-field-images   # register the farmer's weekly photos
+.\dev.ps1 weather-quality         # weather coverage / gap report
+```
+
+`.\dev.ps1` with no argument lists every command (test, serve, migrate, revision, seed, fetch-weather, and the three above).
+
+| Document | What it holds |
+|---|---|
+| [docs/data_dictionary.md](docs/data_dictionary.md) | Every table and dataset: columns, units, meaning, source, timezone, and which script produces it |
+| [docs/data_report.md](docs/data_report.md) | PlantVillage class counts per split, the class imbalance, integrity checks, licence and citations |
+| [docs/data_quality.md](docs/data_quality.md) | Weather coverage, missing hours per month, out-of-range values, share of Hutton-ready days |
+| [docs/firmware_contract.md](docs/firmware_contract.md) | The ingest contract the ESP32 must follow |
+
+Notes on the image export:
+
+- The split CSVs (`data/splits/*.csv`), the `data/field_images/` structure and its `metadata.csv` are **committed**; the images themselves are gitignored.
+- Splits are 70/15/15, stratified per class, seed 42, so anyone can rebuild the exact same split.
+- **Getting the images.** Mendeley, which hosts the PlantVillage archive, answers TFDS's downloader with HTTP 403 while serving the same file to a browser or curl, so the TFDS path cannot be relied on. Download the archive once and export from it:
+
+  ```powershell
+  New-Item -ItemType Directory -Force data\raw | Out-Null
+  curl.exe -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36" `
+    -o data\raw\plantvillage_mendeley.zip `
+    "https://data.mendeley.com/public-files/datasets/tywbtsjrjv/files/d5652a28-c1d8-4b76-97f3-72fb80f94efc/file_downloaded"
+  .\dev.ps1 prepare-images --from-archive data\raw\plantvillage_mendeley.zip
+  ```
+
+  Same CC0 source, and this path needs no TensorFlow. Only the non-augmented copy in the archive is used: the augmented images are rotations and colour shifts of the originals, and including them would put near-duplicates on both sides of the train/test split.
+- The TFDS path (`prepare-images` with no `--from-archive`) is still there for when the download works, and needs `pip install -r requirements-ml.txt`. On Windows, TensorFlow's very long internal paths break that install inside a deeply nested project folder; either enable Windows long-path support or install it into a venv at a short path (e.g. `C:\blightml`) and run the script with that interpreter.
+
+## Continuous integration
+
+[.github/workflows/tests.yml](.github/workflows/tests.yml) runs on every push to `main` and every pull request: it starts a PostgreSQL 16 service, applies the Alembic migrations, and runs the full pytest suite on Python 3.11.
+
 ## Setup
 
 Requires Python 3.11 and PostgreSQL 15+ (developed on 18). All commands run from the repo root in PowerShell.

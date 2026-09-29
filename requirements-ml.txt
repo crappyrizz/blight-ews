@@ -1,0 +1,15 @@
+# Heavy machine-learning extras, needed only to export the PlantVillage images
+# (ml/prepare_images.py) and to train models locally. About 300 MB installed.
+# The backend, the tests and CI do not need these.
+#
+#   .\.venv\Scripts\python.exe -m pip install -r requirements-ml.txt
+#
+# CNN training itself happens in Google Colab (ml/train_cnn.ipynb); this is
+# only what the local data-preparation step requires.
+
+tensorflow-cpu==2.20.0
+tensorflow-datasets==4.9.10
+# tensorflow-datasets 4.9.10 imports these lazily but does not declare them,
+# so the dataset build fails with ModuleNotFoundError without them.
+importlib_resources
+etils[epath]

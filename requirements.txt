@@ -26,5 +26,14 @@ PyJWT==2.15.1
 # HTTP client: Open-Meteo fetching (ml/fetch_weather.py) and the test client
 httpx==0.28.1
 
+# Data preparation and reporting
+pandas==3.0.6
+matplotlib==3.11.2
+pillow==12.3.0
+
+# NOTE: exporting the PlantVillage images also needs TensorFlow, which is a
+# large install and is not required to run the backend or the tests:
+#   pip install -r requirements-ml.txt
+
 # Testing
 pytest==9.1.1
