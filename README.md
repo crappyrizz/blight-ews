@@ -92,6 +92,24 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 - Node keys are random strings stored only as bcrypt hashes. `tools/seed.py` prints a key once when it issues one, including for an existing node that has none (that is how a lost key is replaced).
 - **The full contract for the firmware is in [docs/firmware_contract.md](docs/firmware_contract.md)**: headers, payload, limits, status codes, and the retry/buffer rules the ESP32 must follow.
 
+## Weather fetching (ml/fetch_weather.py)
+
+```powershell
+.\.venv\Scripts\python.exe -m ml.fetch_weather --source archive --start 2015-01-01 --end 2026-09-20
+.\.venv\Scripts\python.exe -m ml.fetch_weather --source archive --days 30   # shortcut
+```
+
+| Source | Endpoint | Coverage | Notes |
+|---|---|---|---|
+| `archive` | `archive-api.open-meteo.com/v1/archive` (ERA5) | 1940 → today−5 days | The long, consistent record; ~5-day publication lag, so it never covers this morning |
+| `historical_forecast` | `historical-forecast-api.open-meteo.com/v1/forecast` | ~2022 → today | What the models predicted at the time; needed for the Hutton-on-forecast benchmark |
+
+- Free, no API key (600 calls/min, 10,000/day). Fetched in yearly chunks with retry and backoff; 429/5xx are retried, a 400 is not.
+- Re-running is safe: `ON CONFLICT DO NOTHING` on the weather uniqueness constraint, so a repeated range stores 0 rows.
+- Hours the API returns as null are dropped, never interpolated; `hutton.py` then decides whether the day still has its 20 of 24 values.
+- Raw responses are also written to `data/weather/*.csv` (gitignored) for inspection.
+- **`forecast_issued_at` stays null.** The historical forecast API is a continuous series stitched from the first hours of successive model runs and exposes no per-hour issue time. A true fixed-lead-time forecast needs the Previous Runs API (`*_previous_day1/2`, archived from 2024) or the Single Runs API (`&run=`).
+
 ## Setup
 
 Requires Python 3.11 and PostgreSQL 15+ (developed on 18). All commands run from the repo root in PowerShell.

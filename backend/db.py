@@ -11,7 +11,14 @@ from backend.config import settings
 engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
-    connect_args={"connect_timeout": 5},
+    connect_args={
+        "connect_timeout": 5,
+        # Postgres renders timestamptz in the session's timezone, and this
+        # server's is Africa/Nairobi. Pinning the session to UTC means rows
+        # read back as UTC, as the rest of the project assumes; conversion to
+        # local time stays an explicit step in hutton.py.
+        "options": "-c timezone=UTC",
+    },
 )
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)

@@ -23,6 +23,8 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 PyJWT==2.15.1
 
+# HTTP client: Open-Meteo fetching (ml/fetch_weather.py) and the test client
+httpx==0.28.1
+
 # Testing
 pytest==9.1.1
-httpx==0.28.1
