@@ -6,7 +6,8 @@ is normalised to one canonical form, +2547XXXXXXXX or +2541XXXXXXXX, no
 matter how it was typed.
 """
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -100,3 +101,81 @@ class SensorNodeOut(BaseModel):
     latitude: float
     longitude: float
     last_sync_time: datetime | None
+
+
+# --- sensor ingest -----------------------------------------------------
+# These limits are part of the firmware contract (docs/firmware_contract.md).
+# Changing one changes what the ESP32 is allowed to send.
+
+MAX_BATCH_SIZE = 500
+FUTURE_TOLERANCE_MINUTES = 10  # allows for a little clock drift on the node
+MIN_TEMPERATURE_C = -10.0
+MAX_TEMPERATURE_C = 50.0
+MIN_HUMIDITY_PCT = 0.0
+MAX_HUMIDITY_PCT = 100.0
+
+
+class ReadingIn(BaseModel):
+    """One hourly reading as the node sends it.
+
+    extra='forbid' so a typo in a field name is reported to the firmware
+    author instead of being silently dropped.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    timestamp: datetime
+    temperature: float = Field(ge=MIN_TEMPERATURE_C, le=MAX_TEMPERATURE_C)
+    humidity: float = Field(ge=MIN_HUMIDITY_PCT, le=MAX_HUMIDITY_PCT)
+    leaf_wetness: float | None = None
+
+    @field_validator("timestamp")
+    @classmethod
+    def _must_be_utc_and_not_future(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            # A time with no zone is ambiguous, and this project's whole daily
+            # aggregation depends on knowing the instant exactly.
+            raise ValueError("timestamp must include a timezone, e.g. 2026-09-22T03:00:00Z")
+
+        limit = datetime.now(timezone.utc) + timedelta(minutes=FUTURE_TOLERANCE_MINUTES)
+        if value > limit:
+            raise ValueError(
+                f"timestamp is more than {FUTURE_TOLERANCE_MINUTES} minutes in the future; "
+                "check the node's clock"
+            )
+        # Old timestamps are fine: the node buffers readings while offline and
+        # flushes them when the network returns.
+        return value.astimezone(timezone.utc)
+
+
+class ReadingBatch(BaseModel):
+    """A flush from the node.
+
+    Rows are deliberately untyped here: each is validated on its own in
+    ingest.py, so one bad reading is reported back by position rather than
+    costing the node the whole buffer it has been holding.
+    """
+
+    readings: list[Any]
+
+
+class RejectedReading(BaseModel):
+    index: int  # position in the batch the node sent
+    reason: str
+
+
+class IngestResult(BaseModel):
+    accepted: int
+    duplicates: int
+    rejected: list[RejectedReading]
+
+
+class ReadingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    reading_id: str
+    node_id: str
+    timestamp: datetime
+    temperature: float
+    humidity: float
+    leaf_wetness: float | None

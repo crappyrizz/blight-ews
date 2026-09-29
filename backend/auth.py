@@ -14,10 +14,11 @@ Three things live here:
    image), that routing is written down once, in OWNER_LOOKUPS, rather than
    repeated in each endpoint where it could be got wrong.
 """
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Path, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from passlib.context import CryptContext
 from sqlalchemy import select
@@ -63,6 +64,27 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, password_hash: str) -> bool:
     return pwd_context.verify(password, password_hash)
+
+
+# --- node API keys ----------------------------------------------------
+# A node key is a long random string, shown once when the node is issued it
+# and then only ever stored as a bcrypt hash, like a password. The same
+# hashing is used for both so there is one thing to explain and one thing to
+# get right; a node flushes readings every few minutes, so the cost of a
+# bcrypt check per request is irrelevant here.
+
+
+def generate_node_key() -> str:
+    """A fresh node key. Show it once; only its hash is stored."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_node_key(key: str) -> str:
+    return pwd_context.hash(key)
+
+
+def verify_node_key(key: str, key_hash: str) -> bool:
+    return pwd_context.verify(key, key_hash)
 
 
 # --- tokens -----------------------------------------------------------
@@ -132,6 +154,35 @@ def get_current_farmer(
         # Valid signature, but the account is gone (e.g. deleted since).
         raise CREDENTIALS_ERROR
     return farmer
+
+
+def get_current_node(
+    node_id: str = Path(...),
+    x_node_key: str | None = Header(default=None, alias="X-Node-Key"),
+    db: Session = Depends(get_db),
+) -> SensorNode:
+    """The sensor node behind the X-Node-Key header on this request.
+
+    Nodes authenticate with their own key, never with a farmer's JWT: the
+    firmware is installed in a field box, so its credential must be
+    revocable on its own and must grant nothing but sending readings.
+
+    An unknown node_id and a wrong key give the same 401, so the endpoint
+    cannot be used to find out which node IDs exist.
+    """
+    if not x_node_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing X-Node-Key header",
+        )
+
+    node = db.get(SensorNode, node_id)
+    if node is None or not node.api_key_hash or not verify_node_key(x_node_key, node.api_key_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid node credentials",
+        )
+    return node
 
 
 def require_admin(farmer: Farmer = Depends(get_current_farmer)) -> Farmer:

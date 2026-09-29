@@ -67,6 +67,10 @@ class SensorNode(Base):
     longitude: Mapped[float] = mapped_column(Float)
     # Null until the node sends its first reading.
     last_sync_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # bcrypt hash of the node's own API key, which it sends as X-Node-Key.
+    # Only the hash is stored, so a database dump does not hand over the key.
+    # Null for a node that has not been issued a key yet.
+    api_key_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class SensorReading(Base):
