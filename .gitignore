@@ -1,0 +1,67 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- Secrets / config ---
+.env
+.env.*
+!.env.example
+
+# --- Data (raw weather, images, uploads) ---
+# Data files are ignored, with three exceptions that must be committed for the
+# work to be reproducible: the train/val/test split CSVs, the field-image
+# folder structure, and the field-image metadata.
+data/*
+!data/.gitkeep
+
+!data/splits/
+data/splits/*
+!data/splits/*.csv
+
+!data/field_images/
+data/field_images/*
+!data/field_images/.gitkeep
+!data/field_images/metadata.csv
+!data/field_images/*/
+data/field_images/*/*
+!data/field_images/*/.gitkeep
+
+# --- Model artefacts (large binaries; labels.txt stays tracked) ---
+models/*.joblib
+models/*.tflite
+
+# --- Flutter / Dart (app/) ---
+app/build/
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.packages
+app/.pub-cache/
+app/.pub/
+app/android/.gradle/
+app/android/local.properties
+app/ios/Pods/
+app/ios/Flutter/Generated.xcconfig
+app/ios/Flutter/flutter_export_environment.sh
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+.DS_Store

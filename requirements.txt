@@ -1,0 +1,39 @@
+# Backend dependencies (Python 3.11). Install with:
+#   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# Web API
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+
+# Database
+SQLAlchemy==2.0.54
+alembic==1.20.0
+psycopg[binary]==3.3.6
+
+# Config / validation
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-dotenv==1.2.3
+
+# Password hashing and tokens
+passlib[bcrypt]==1.7.4
+# bcrypt is pinned to 4.0.1 on purpose: passlib 1.7.4 probes the bcrypt
+# backend with a 73-byte password, which bcrypt >= 4.1 rejects outright, so
+# newer bcrypt versions break password hashing entirely.
+bcrypt==4.0.1
+PyJWT==2.15.1
+
+# HTTP client: Open-Meteo fetching (ml/fetch_weather.py) and the test client
+httpx==0.28.1
+
+# Data preparation and reporting
+pandas==3.0.6
+matplotlib==3.11.2
+pillow==12.3.0
+
+# NOTE: exporting the PlantVillage images also needs TensorFlow, which is a
+# large install and is not required to run the backend or the tests:
+#   pip install -r requirements-ml.txt
+
+# Testing
+pytest==9.1.1
