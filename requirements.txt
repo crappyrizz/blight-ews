@@ -15,8 +15,13 @@ pydantic==2.13.5
 pydantic-settings==2.15.0
 python-dotenv==1.2.3
 
-# Password hashing
-bcrypt==5.0.0
+# Password hashing and tokens
+passlib[bcrypt]==1.7.4
+# bcrypt is pinned to 4.0.1 on purpose: passlib 1.7.4 probes the bcrypt
+# backend with a 73-byte password, which bcrypt >= 4.1 rejects outright, so
+# newer bcrypt versions break password hashing entirely.
+bcrypt==4.0.1
+PyJWT==2.15.1
 
 # Testing
 pytest==9.1.1

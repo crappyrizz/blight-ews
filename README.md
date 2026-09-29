@@ -28,7 +28,9 @@ The farmer grows the Shangi variety, prefers SMS, has a smartphone, and has weak
 
 ## Stack
 
-Python 3.11 or 3.12 · FastAPI · SQLAlchemy 2.x + Alembic · PostgreSQL · pydantic v2 · pytest · TensorFlow/Keras (training in Google Colab) · scikit-learn · pandas · Africa's Talking Python SDK · Open-Meteo (weather) · Flutter (app).
+Python 3.11 or 3.12 · FastAPI · SQLAlchemy 2.x + Alembic · PostgreSQL · pydantic v2 · passlib[bcrypt] + PyJWT (auth) · pytest · TensorFlow/Keras (training in Google Colab) · scikit-learn · pandas · Africa's Talking Python SDK · Open-Meteo (weather) · Flutter (app).
+
+Note: `bcrypt` is pinned to 4.0.1 because passlib 1.7.4 cannot use bcrypt 4.1+.
 
 ## Repo layout
 
@@ -64,6 +66,14 @@ docs/      evaluation outputs (tables/figures) for Chapter 5
 - **symptom_reports**(report_id PK, farmer_id FK, node_id FK, onset_date DATE, notes, reported_at)
 
 All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for daily aggregation and display.
+
+## Authentication and access (FR i)
+
+- `POST /auth/register` (name, phone_number, password, farm_id) → 201, role is always `farmer`; admins come from seeding. A duplicate phone number gives 409.
+- `POST /auth/login` (phone_number, password) → JWT access token, expiry from `JWT_EXPIRE_MINUTES`. A wrong password and an unknown number give the same 401, so registered numbers cannot be probed.
+- `GET /me` → the logged-in farmer. `GET /nodes`, `GET /nodes/{node_id}` → own nodes only. `GET /admin/farmers` → admin only (403 otherwise).
+- Phone numbers are normalised to `+2547XXXXXXXX` / `+2541XXXXXXXX` on input, accepting `07…`, `01…`, `254…`, `+254…`, with or without spaces and dashes.
+- **Ownership** is decided in one place, `auth.OWNER_LOOKUPS`, which records how each table reaches its owning farmer (a reading through its node, a diagnosis through its image). `auth.get_owned_or_404()` answers **404, not 403**, for someone else's record, so a stranger cannot confirm that an ID exists. Admins may read anything. A table with no ownership rule raises `TypeError` rather than being allowed through by default.
 
 ## Conventions
 
