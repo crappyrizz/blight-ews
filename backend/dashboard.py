@@ -6,12 +6,12 @@ the weather is doing and what the farmer might want to check, never what
 he must do. The farmer has said he will not act on an automated
 instruction until the system has earned it, so "Spray now" never appears.
 
-Which number is "the current risk"? The same one fusion uses for a leaf
-diagnosis (fusion.resolve_risk: today's Hutton score from the sensor, else
-the latest judged day within 3 days, else the neutral 0.5), so the dashboard
-and a diagnosis taken at the same moment can never disagree. The learned
-24 h / 48 h probabilities are shown beside it as the forecast, and the
-summary sentence takes both into account.
+Which number is "the current risk"? The same r fusion uses for a leaf
+diagnosis (fusion.resolve_risk: the learned 24 h forecast covering today,
+else today's Hutton score from the sensor, else the latest judged day within
+3 days, else the neutral 0.5), so the dashboard and a diagnosis taken at the
+same moment can never disagree. The 24 h / 48 h probabilities are also shown
+as the forecast, and the summary sentence takes both into account.
 """
 from datetime import UTC, date, datetime, timedelta
 

@@ -12,12 +12,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend import auth, cnn_service, dashboard, hutton, ids, ingest, risk_job
+from backend import auth, cnn_service, dashboard, fusion, hutton, ids, ingest, risk_job
 from backend.config import REPO_ROOT, settings
 from backend.db import get_db
 from backend.models import Farmer, LeafImage, SensorNode, SensorReading, SymptomReport
 from backend.schemas import (
     MAX_BATCH_SIZE,
+    DiagnosisOut,
     FarmerLogin,
     FarmerOut,
     FarmerRegister,
@@ -239,11 +240,14 @@ def upload_image(
     capture_date: datetime | None = Form(
         None, description="When the photo was taken, with timezone; default: now"
     ),
+    node_id: str | None = Form(
+        None, description="The sensor node at this plot; default: the farmer's only node"
+    ),
     farmer: Farmer = Depends(auth.get_current_farmer),
     db: Session = Depends(get_db),
     classifier: cnn_service.CNNClassifier = Depends(cnn_service.get_classifier),
 ):
-    """Upload a leaf photo, store it, and return the CNN's raw prediction.
+    """Upload a leaf photo: store it, run the CNN, fuse with the weather risk.
 
     A photo the model cannot judge fairly (unreadable, too small, too dark,
     too blurry) gets 422 with a reason code and a message the app can show,
@@ -254,6 +258,8 @@ def upload_image(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="capture_date needs a timezone, e.g. 2026-10-12T09:30:00+03:00",
         )
+
+    node = _node_for_photo(db, farmer, node_id)
 
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
@@ -287,23 +293,22 @@ def upload_image(
         file_path=_stored_path(path),
         capture_date=capture_date or datetime.now(UTC),
     )
-    db.add(leaf_image)
     try:
+        db.add(leaf_image)
+        db.flush()
+        # Fusion (backend/fusion.py): the weather risk r for the photo's own
+        # day moves the late-blight threshold tau(r); the diagnosis row and
+        # its 48 h of contributing sensor readings are written with the image.
+        diagnosis, fused, contributions = fusion.diagnose(
+            db, image_id, node.node_id if node else None, leaf_image.capture_date,
+            prediction.probabilities,
+        )
         db.commit()
     except SQLAlchemyError:
         db.rollback()
-        path.unlink(missing_ok=True)  # no row, so no orphan file either
+        path.unlink(missing_ok=True)  # no rows, so no orphan file either
         raise
     db.refresh(leaf_image)
-
-    # ===================== FUSION HOOK (later prompt) =====================
-    # This is where the weather-based risk score r is combined with the CNN:
-    # fusion.resolve_risk() picks today's risk for the farmer's node,
-    # tau(r) shifts the late-blight threshold, and a diagnosis_results row is
-    # written (label, confidence, probabilities, risk_score_used,
-    # threshold_used, risk_level, late_blight_flagged). Until then the raw
-    # prediction below is returned as-is and no diagnosis row is stored.
-    # ======================================================================
 
     return ImageUploadOut(
         image=LeafImageOut.model_validate(leaf_image),
@@ -312,7 +317,39 @@ def upload_image(
             confidence=prediction.confidence,
             probabilities=prediction.probabilities,
         ),
+        diagnosis=DiagnosisOut(
+            result_id=diagnosis.result_id,
+            label=fused.label,
+            confidence=fused.confidence,
+            risk_score_used=fused.risk_score_used,
+            risk_basis=fused.risk_basis,
+            risk_for_date=fused.risk_for_date,
+            risk_note=fused.note,
+            threshold_used=fused.threshold_used,
+            late_blight_flagged=fused.late_blight_flagged,
+            risk_level=fused.risk_level,
+            summary=fused.summary,
+            contributing_readings=contributions,
+        ),
     )
+
+
+def _node_for_photo(db: Session, farmer: Farmer, node_id: str | None) -> SensorNode | None:
+    """The node whose weather applies to this photo.
+
+    Given: it must be the farmer's (404 otherwise). Not given: the farmer's
+    only node; with several the app must say which (422); with none, fusion
+    falls back to the neutral prior and says so.
+    """
+    if node_id is not None:
+        return auth.get_owned_or_404(db, SensorNode, node_id, farmer)
+    nodes = db.scalars(select(SensorNode).where(SensorNode.farmer_id == farmer.farmer_id)).all()
+    if len(nodes) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="You have several sensor nodes; send node_id to say which plot the photo is from.",
+        )
+    return nodes[0] if nodes else None
 
 
 @app.get("/images/{image_id}", response_model=LeafImageOut)

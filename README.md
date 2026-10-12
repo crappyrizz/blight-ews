@@ -60,7 +60,7 @@ docs/      evaluation outputs (tables/figures) for Chapter 5
 - **weather_readings**(weather_id PK, latitude, longitude, source ['archive'|'historical_forecast'|'forecast'], timestamp, temperature, humidity, forecast_issued_at NULLABLE; UNIQUE(source, latitude, longitude, timestamp, forecast_issued_at))
 - **risk_scores**(score_id PK, node_id FK, method ['hutton'|'learned'], data_source ['sensor'|'api'], horizon_hours [0|24|48], status ['ok'|'insufficient_data'|'no_data'], score FLOAT 0-1 NULLABLE, valid_hours INT NULL, hutton_day BOOL NULL, hutton_period BOOL NULL, model_version NULL, for_date DATE, computed_at)
 - **leaf_images**(image_id PK, farmer_id FK, file_path, capture_date)
-- **diagnosis_results**(result_id PK, image_id FK UNIQUE, disease_label, confidence, probabilities JSON, risk_score_used FLOAT, threshold_used FLOAT, risk_level ['low'|'medium'|'high'], late_blight_flagged BOOL, timestamp)
+- **diagnosis_results**(result_id PK, image_id FK UNIQUE, disease_label, confidence, probabilities JSON, risk_score_used FLOAT, threshold_used FLOAT, risk_level ['low'|'medium'|'high'], late_blight_flagged BOOL, risk_basis ['learned_24h'|'hutton_today'|'hutton_fallback'|'neutral_prior'], risk_for_date DATE NULL, timestamp)
 - **reading_contributions**(reading_id FK, result_id FK, composite PK)
 - **alerts**(alert_id PK, node_id FK, result_id FK NULLABLE, risk_score_id FK NULLABLE, alert_type ['high_risk'|'diagnosis'|'low_risk'], message TEXT, sent_at, delivery_status, provider_message_id)
 - **symptom_reports**(report_id PK, farmer_id FK, node_id FK, onset_date DATE, notes, reported_at)
@@ -100,6 +100,13 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 - `GET /nodes/{node_id}/dashboard`: latest reading and its age, the last 24 h (min/max temperature, humid hours), today's Hutton status, the learned 24 h / 48 h probabilities (with the day they were issued from), the current risk and level, and a one-sentence summary. The current risk is the same number fusion uses for a diagnosis (`fusion.resolve_risk`: today's sensor Hutton score, else the latest judged day within 3 days, else a neutral 0.5), so the two never disagree. The summary is decision support ("Conditions favour blight over the next 2 days, so consider checking the crop."), never an instruction, and unknown data is called unknown, never low.
 - `GET /nodes/{node_id}/history?days=30` (1-365): every day newest first, with gaps shown as gaps, plus diagnoses and alerts, newest first (FR viii).
 - `POST /symptom-reports` (`node_id`, `onset_date`, `notes`) and `GET /symptom-reports[?node_id=]`: own reports only; the onset date cannot be after today (local).
+
+## Fusion (backend/fusion.py)
+
+- **The rule:** `tau(r) = clip(TAU0 - K*(r - 0.5), TAU_MIN, TAU_MAX)` with TAU0 0.60, K 0.40, TAU_MIN 0.35, TAU_MAX 0.85 (config: `FUSION_*`), and `late_blight_flagged = p_late >= tau(r)`. With these values and r in [0, 1], tau runs from 0.80 (r = 0) to 0.40 (r = 1), so the clip is a safety net that only binds if TAU0 or K are re-tuned. Only late blight is gated; the CNN's label and confidence are reported as they are.
+- **Which r:** the learned 24 h forecast covering the photo's own local day (issued from the previous day's sensor data); else that day's sensor Hutton score; else the latest judged day within 3 days; else the neutral 0.5. The choice is stored with the diagnosis (`risk_basis`, `risk_for_date`). API rows never stand in for the sensor.
+- **POST /images** now writes a `diagnosis_results` row and links the node's sensor readings from the 48 h before the photo (`reading_contributions`). The response adds `diagnosis`: label, confidence, r, its basis, tau, `late_blight_flagged`, `risk_level` and a decision-support sentence. Optional form field `node_id`; by default the farmer's only node is used (422 if they have several, the neutral prior if none).
+- **Sensitivity:** `.\.venv\Scripts\python.exe -m ml.fusion_eval` sweeps r over 0.1-0.9 on the CNN test set and writes `docs/fusion_eval.md`.
 
 ## Sensor ingest (FR ii)
 
