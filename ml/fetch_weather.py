@@ -2,10 +2,16 @@
 
 Two Open-Meteo APIs, for two different jobs:
 
-- **archive** (`archive-api.open-meteo.com/v1/archive`, ERA5 reanalysis):
-  the long, consistent record. Data from 1940 onwards, but it lags about
-  5 days behind today, so it can never tell us about this morning.
-  This is the history the Hutton baseline and the learned model train on.
+- **archive** (`archive-api.open-meteo.com/v1/archive`, pinned to the
+  ERA5-Land reanalysis): the long, consistent record. It lags about 5-6 days
+  behind today, so it can never tell us about this morning. This is the
+  history the Hutton baseline and the learned model train on.
+
+  The model MUST be pinned. Left to its default ("best_match"), the archive
+  API serves ECMWF IFS forecast data for this location from about 2017-18
+  (identical, hour for hour, to the historical-forecast API) and something
+  else before that. The record would then change source partway through, and
+  the forecast baseline would be scored against itself.
 
 - **historical_forecast**
   (`historical-forecast-api.open-meteo.com/v1/forecast`): what the forecast
@@ -28,7 +34,7 @@ import csv
 import logging
 import sys
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -44,20 +50,28 @@ log = logging.getLogger("fetch_weather")
 SOURCE_ARCHIVE = "archive"
 SOURCE_HISTORICAL_FORECAST = "historical_forecast"
 
+# The weather model each source is pinned to (None = the API's own default).
+# ERA5-Land: ECMWF's land reanalysis at 0.1 degrees (~9 km), finer than
+# ERA5's 0.25 degrees, which matters on the Kinangop plateau.
+SOURCE_MODELS = {
+    SOURCE_ARCHIVE: "era5_land",
+    SOURCE_HISTORICAL_FORECAST: None,
+}
+
 SOURCE_URLS = {
     SOURCE_ARCHIVE: "https://archive-api.open-meteo.com/v1/archive",
     SOURCE_HISTORICAL_FORECAST: "https://historical-forecast-api.open-meteo.com/v1/forecast",
 }
 
-# How far back each source goes. ERA5 reaches 1940 worldwide, including
+# How far back each source goes. ERA5-Land reaches 1950 worldwide, including
 # Kenya; the historical forecast archive only starts around 2022 for the
 # models that cover this region.
 EARLIEST_DATE = {
-    SOURCE_ARCHIVE: date(1940, 1, 1),
+    SOURCE_ARCHIVE: date(1950, 1, 1),
     SOURCE_HISTORICAL_FORECAST: date(2022, 1, 1),
 }
 
-# ERA5 is published with about a 5-day delay, so asking for yesterday
+# ERA5-Land is published with about a 5-6 day delay, so asking for yesterday
 # returns empty hours rather than an error.
 ARCHIVE_LAG_DAYS = 5
 
@@ -124,6 +138,8 @@ def fetch_chunk(
         # only where a local calendar day is needed.
         "timezone": "UTC",
     }
+    if SOURCE_MODELS.get(source):
+        params["models"] = SOURCE_MODELS[source]
 
     last_error = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -168,13 +184,13 @@ def parse_hourly(payload: dict) -> tuple[list[dict], int]:
 
     rows = []
     missing = 0
-    for moment, temperature, humidity in zip(times, temperatures, humidities):
+    for moment, temperature, humidity in zip(times, temperatures, humidities, strict=False):
         if temperature is None or humidity is None:
             missing += 1
             continue
         rows.append({
             # timezone=UTC means the strings carry no offset; they are UTC.
-            "timestamp": datetime.fromisoformat(moment).replace(tzinfo=timezone.utc),
+            "timestamp": datetime.fromisoformat(moment).replace(tzinfo=UTC),
             "temperature": float(temperature),
             "humidity": float(humidity),
         })
@@ -197,8 +213,13 @@ def save_csv(
             hourly.get("time") or [],
             hourly.get(TEMPERATURE_VARIABLE) or [],
             hourly.get(HUMIDITY_VARIABLE) or [],
+            strict=False,
         ))
     return path
+
+
+# Rows per INSERT: 8 columns each, well under PostgreSQL's 65,535-parameter cap.
+INSERT_SLICE_ROWS = 5000
 
 
 def store_rows(
@@ -228,13 +249,17 @@ def store_rows(
         for row in rows
     ]
 
-    statement = (
-        pg_insert(WeatherReading)
-        .values(values)
-        .on_conflict_do_nothing(constraint=WEATHER_CONFLICT)
-        .returning(WeatherReading.weather_id)
-    )
-    stored = len(session.scalars(statement).all())
+    # PostgreSQL allows at most 65,535 bind parameters per statement, and a
+    # full year is 8,760 rows x 8 columns = 70,080, so insert in slices.
+    stored = 0
+    for i in range(0, len(values), INSERT_SLICE_ROWS):
+        statement = (
+            pg_insert(WeatherReading)
+            .values(values[i:i + INSERT_SLICE_ROWS])
+            .on_conflict_do_nothing(constraint=WEATHER_CONFLICT)
+            .returning(WeatherReading.weather_id)
+        )
+        stored += len(session.scalars(statement).all())
     session.commit()
     return stored, len(values) - stored
 
@@ -299,8 +324,8 @@ def fetch_range(
 
 
 def default_end(source: str) -> date:
-    """Latest date worth asking for: ERA5 lags about 5 days behind today."""
-    today = datetime.now(timezone.utc).date()
+    """Latest date worth asking for: ERA5-Land lags about 5-6 days behind today."""
+    today = datetime.now(UTC).date()
     if source == SOURCE_ARCHIVE:
         return today - timedelta(days=ARCHIVE_LAG_DAYS)
     return today
@@ -310,12 +335,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--source", choices=sorted(SOURCE_URLS), default=SOURCE_ARCHIVE,
-        help="archive (ERA5, from 1940) or historical_forecast (from ~2022)",
+        help="archive (ERA5-Land, from 1950) or historical_forecast (from ~2022)",
     )
     parser.add_argument("--start", type=date.fromisoformat, help="YYYY-MM-DD")
     parser.add_argument(
         "--end", type=date.fromisoformat, default=None,
-        help="YYYY-MM-DD (default: today, minus ERA5's 5-day lag for archive)",
+        help="YYYY-MM-DD (default: today, minus the archive's publication lag)",
     )
     parser.add_argument(
         "--days", type=int, default=None,

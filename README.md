@@ -118,7 +118,7 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 .\dev.ps1 weather-quality         # weather coverage / gap report
 ```
 
-`.\dev.ps1` with no argument lists every command (test, serve, migrate, revision, seed, fetch-weather, and the three above).
+`.\dev.ps1` with no argument lists every command (setup, test, lint, serve, db-migrate, revision, seed, fetch-weather, and the three above).
 
 | Document | What it holds |
 |---|---|
@@ -146,31 +146,33 @@ Notes on the image export:
 
 ## Continuous integration
 
-[.github/workflows/tests.yml](.github/workflows/tests.yml) runs on every push to `main` and every pull request: it starts a PostgreSQL 16 service, applies the Alembic migrations, and runs the full pytest suite on Python 3.11.
+[.github/workflows/tests.yml](.github/workflows/tests.yml) runs on every push to `main` and every pull request, as two jobs:
+
+- **lint**: the pre-commit hooks on every file: ruff ([ruff.toml](ruff.toml)), trailing whitespace, YAML/TOML syntax, files over 500 KB, private keys, and any `.env` file.
+- **pytest**: starts a PostgreSQL 16 service, applies the Alembic migrations, and runs the full pytest suite on Python 3.11.
+
+The same hooks run locally on every `git commit` (installed by `.\dev.ps1 setup`); `.\dev.ps1 lint` runs them on the whole repo.
 
 ## Setup
 
 Requires Python 3.11 and PostgreSQL 15+ (developed on 18). All commands run from the repo root in PowerShell.
 
 ```powershell
-# 1. Virtual environment and dependencies
-& 'C:\Program Files\Python311\python.exe' -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# 1. Virtual environment, dependencies, .env from the template, git hooks
+.\dev.ps1 setup
+#    then open .env and fill in the database password and secrets
 
-# 2. Config: copy the template, then fill in the database password etc.
-Copy-Item .env.example .env
+# 2. Create / update the database tables
+.\dev.ps1 db-migrate
 
-# 3. Create / update the database tables
-.\.venv\Scripts\alembic.exe upgrade head
+# 3. Seed one admin, one farmer and one sensor node (safe to re-run)
+.\dev.ps1 seed
 
-# 4. Seed one admin, one farmer and one sensor node (safe to re-run)
-.\.venv\Scripts\python.exe -m tools.seed
+# 4. Run the tests (uses TEST_DATABASE_URL, never the real database)
+.\dev.ps1 test
 
-# 5. Run the tests (uses TEST_DATABASE_URL, never the real database)
-.\.venv\Scripts\python.exe -m pytest
-
-# 6. Start the API, then open http://127.0.0.1:8000/health
-.\.venv\Scripts\python.exe -m uvicorn backend.app:app --reload
+# 5. Start the API, then open http://127.0.0.1:8000/health
+.\dev.ps1 serve
 ```
 
 The database user and the two databases (`blight_ews`, `blight_ews_test`) are created once by hand with `psql` as the `postgres` superuser.

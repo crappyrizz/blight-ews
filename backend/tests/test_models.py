@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -24,7 +24,7 @@ def test_ids_are_generated_with_prefixes(db_session):
 
 def test_duplicate_sensor_reading_is_rejected(db_session):
     node = make_node(db_session)
-    ts = datetime(2026, 3, 1, 6, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
 
     db_session.add(SensorReading(node_id=node.node_id, temperature=12.5, humidity=91.0, timestamp=ts))
     db_session.flush()
@@ -41,7 +41,7 @@ def test_same_timestamp_on_different_nodes_is_allowed(db_session):
     node_b = SensorNode(farmer_id=node_a.farmer_id, location="Second plot", latitude=-0.71, longitude=36.61)
     db_session.add(node_b)
     db_session.flush()
-    ts = datetime(2026, 3, 1, 6, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
 
     db_session.add(SensorReading(node_id=node_a.node_id, temperature=12.5, humidity=91.0, timestamp=ts))
     db_session.add(SensorReading(node_id=node_b.node_id, temperature=12.7, humidity=90.0, timestamp=ts))
@@ -51,7 +51,7 @@ def test_same_timestamp_on_different_nodes_is_allowed(db_session):
 def test_duplicate_archive_weather_row_is_rejected(db_session):
     # forecast_issued_at is NULL for archive data; NULLS NOT DISTINCT must
     # still treat these two rows as duplicates.
-    ts = datetime(2026, 3, 1, 6, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 3, 1, 6, 0, tzinfo=UTC)
     row = dict(latitude=-0.7, longitude=36.6, source="archive", timestamp=ts, temperature=11.0, humidity=88.0)
 
     db_session.add(WeatherReading(**row))

@@ -1,0 +1,30 @@
+# Checks that run on every `git commit` (installed by .\dev.ps1 setup).
+# Run them on the whole repo with:  .\dev.ps1 lint
+# CI runs the same hooks, so a commit that skips them still gets caught.
+exclude: ^data/  # committed split CSVs are generated; leave them byte-for-byte
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.0
+    hooks:
+      - id: ruff-check
+
+  - repo: local
+    hooks:
+      - id: no-env-file
+        name: never commit .env (secrets live there)
+        entry: .env files hold secrets and must not be committed; use .env.example
+        language: fail
+        files: (^|/)\.env$

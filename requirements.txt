@@ -37,3 +37,7 @@ pillow==12.3.0
 
 # Testing
 pytest==9.1.1
+
+# Code quality (ruff.toml, .pre-commit-config.yaml; run with .\dev.ps1 lint)
+ruff==0.17.0
+pre-commit==4.6.2

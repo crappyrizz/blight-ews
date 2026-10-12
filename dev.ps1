@@ -1,6 +1,12 @@
 # Developer shortcuts for this project. Run from the repo root:
 #     .\dev.ps1 <command> [extra arguments]
 #
+# First time on a new machine (or a fresh clone):
+#     .\dev.ps1 setup        then fill in .env, then
+#     .\dev.ps1 db-migrate
+#     .\dev.ps1 seed
+#     .\dev.ps1 test
+#
 # Example:
 #     .\dev.ps1 test
 #     .\dev.ps1 fetch-weather --days 30
@@ -17,10 +23,45 @@ param(
 $python = ".\.venv\Scripts\python.exe"
 $alembic = ".\.venv\Scripts\alembic.exe"
 
+# setup creates the virtual environment, so it runs before the check below.
+if ($Command -eq "setup") {
+    if (-not (Test-Path $python)) {
+        # Python 3.11 is the project's version (TensorFlow support, and CI).
+        $launcher = Get-Command py -ErrorAction SilentlyContinue
+        $python311 = "C:\Program Files\Python311\python.exe"
+        if ($launcher) {
+            & py -3.11 -m venv .venv
+        } elseif (Test-Path $python311) {
+            & $python311 -m venv .venv
+        } else {
+            Write-Host "Python 3.11 not found. Install it from python.org first." -ForegroundColor Yellow
+            exit 1
+        }
+        if (-not (Test-Path $python)) { exit 1 }
+    }
+    & $python -m pip --version *> $null
+    if ($LASTEXITCODE -ne 0) {
+        # Seen when the folder path is long: pip's own files pass Windows'
+        # 260-character limit while the venv is being created.
+        Write-Host "pip is missing from .venv. If this folder's path is long, clone to a shorter" -ForegroundColor Yellow
+        Write-Host "path or enable Windows long paths, then delete .venv and run setup again." -ForegroundColor Yellow
+        exit 1
+    }
+    & $python -m pip install --upgrade pip
+    & $python -m pip install -r requirements.txt
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if (-not (Test-Path ".env")) {
+        Copy-Item .env.example .env
+        Write-Host "Created .env from .env.example: fill in the database password and secrets." -ForegroundColor Yellow
+    }
+    # Git hooks: ruff and the other checks run on every commit.
+    & $python -m pre_commit install
+    Write-Host "Setup done. Next: .\dev.ps1 db-migrate, .\dev.ps1 seed, .\dev.ps1 test" -ForegroundColor Green
+    exit 0
+}
+
 if (-not (Test-Path $python)) {
-    Write-Host "No virtual environment found. Create one with:" -ForegroundColor Yellow
-    Write-Host "  & 'C:\Program Files\Python311\python.exe' -m venv .venv"
-    Write-Host "  $python -m pip install -r requirements.txt"
+    Write-Host "No virtual environment found. Run:  .\dev.ps1 setup" -ForegroundColor Yellow
     exit 1
 }
 
@@ -28,10 +69,14 @@ switch ($Command) {
     "test" {
         & $python -m pytest @Rest
     }
+    "lint" {
+        # The same checks as the git hook and CI: ruff, whitespace, secrets, large files.
+        & $python -m pre_commit run --all-files @Rest
+    }
     "serve" {
         & $python -m uvicorn backend.app:app --reload @Rest
     }
-    "migrate" {
+    { $_ -in "db-migrate", "migrate" } {
         & $alembic upgrade head @Rest
     }
     "revision" {
@@ -60,9 +105,11 @@ switch ($Command) {
     default {
         Write-Host "Usage: .\dev.ps1 <command> [arguments]"
         Write-Host ""
+        Write-Host "  setup                  create .venv, install requirements, .env, git hooks"
         Write-Host "  test                   run the pytest suite"
+        Write-Host "  lint                   run ruff and the pre-commit checks on every file"
         Write-Host "  serve                  start the API with reload"
-        Write-Host "  migrate                apply database migrations"
+        Write-Host "  db-migrate             apply database migrations (alias: migrate)"
         Write-Host "  revision `"message`"     autogenerate a migration"
         Write-Host "  seed                   create the seed farmer, admin and node"
         Write-Host "  fetch-weather          pull Open-Meteo weather (see --help)"
@@ -72,3 +119,6 @@ switch ($Command) {
         if ($Command -ne "help") { exit 1 }
     }
 }
+
+# Pass the command's exit code on (so a failing test run fails the script).
+exit $LASTEXITCODE

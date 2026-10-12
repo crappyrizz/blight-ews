@@ -1,4 +1,6 @@
 """Tests for registration, login, tokens and the ownership rule."""
+from datetime import UTC
+
 import pytest
 
 from backend import auth
@@ -258,7 +260,7 @@ def test_node_list_only_shows_your_own_nodes(client, db_session):
 
 def test_ownership_rule_covers_records_that_reach_the_farmer_indirectly(db_session):
     """A reading belongs to a farmer through its node, an image directly."""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from backend.models import LeafImage, SensorReading
 
@@ -267,11 +269,11 @@ def test_ownership_rule_covers_records_that_reach_the_farmer_indirectly(db_sessi
     node_a = make_node(db_session, farmer_a)
     reading = SensorReading(
         node_id=node_a.node_id, temperature=12.0, humidity=95.0,
-        timestamp=datetime(2026, 3, 1, 6, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 3, 1, 6, tzinfo=UTC),
     )
     image = LeafImage(
         farmer_id=farmer_a.farmer_id, file_path="data/uploads/leaf.jpg",
-        capture_date=datetime(2026, 3, 1, 9, tzinfo=timezone.utc),
+        capture_date=datetime(2026, 3, 1, 9, tzinfo=UTC),
     )
     db_session.add_all([reading, image])
     db_session.flush()
@@ -295,7 +297,7 @@ def test_admin_may_read_any_farmers_node(client, db_session):
 
 def test_ownership_rule_refuses_records_it_has_no_rule_for(db_session):
     """A new table must be added to OWNER_LOOKUPS, not silently allowed."""
-    farmer = make_farmer(db_session, "+254700555777")
+    make_farmer(db_session, "+254700555777")
 
     with pytest.raises(TypeError):
         auth.owner_id(db_session, object())

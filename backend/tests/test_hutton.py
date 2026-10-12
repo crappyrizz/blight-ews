@@ -9,7 +9,6 @@ from backend.hutton import (
     STATUS_INSUFFICIENT,
     STATUS_NO_DATA,
     STATUS_OK,
-    DaySummary,
     display_label,
     hutton_period,
     score_for,
