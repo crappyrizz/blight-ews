@@ -200,6 +200,8 @@ def test_fetch_range_sends_the_documented_parameters(db_session, tmp_path):
         "end_date": "2026-09-03",
         "hourly": "temperature_2m,relative_humidity_2m",
         "timezone": "UTC",
+        # Pinned: the default serves IFS forecast data here, not reanalysis.
+        "models": "era5_land",
     }
 
 
@@ -212,6 +214,7 @@ def test_historical_forecast_uses_its_own_host(db_session, tmp_path):
     )
 
     assert client.calls[0]["url"].startswith("https://historical-forecast-api.open-meteo.com")
+    assert "models" not in client.calls[0]["params"]  # the forecast API's own default
 
 
 def test_multi_year_range_makes_one_call_per_year(db_session, tmp_path):
@@ -292,10 +295,10 @@ def test_missing_values_are_counted_not_stored(db_session, tmp_path):
 # --- dates a source cannot serve --------------------------------------
 
 
-def test_archive_start_before_1940_is_refused(db_session):
-    with pytest.raises(ValueError, match="1940"):
+def test_archive_start_before_1950_is_refused(db_session):
+    with pytest.raises(ValueError, match="1950"):  # ERA5-Land starts in 1950
         fw.fetch_range(
-            db_session, fw.SOURCE_ARCHIVE, date(1939, 1, 1), date(1939, 12, 31),
+            db_session, fw.SOURCE_ARCHIVE, date(1949, 1, 1), date(1949, 12, 31),
             client=FakeClient(), sleep=no_sleep,
         )
 
