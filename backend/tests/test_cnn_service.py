@@ -323,3 +323,32 @@ def test_another_farmers_image_is_404_not_403(client, fake_model):
 
 def test_unknown_image_is_404(client, fake_model):
     assert client.get("/images/IMG-DOESNOTEXIST", headers=token_for(client)).status_code == 404
+
+
+# --- command line ----------------------------------------------------------------
+
+
+def test_command_line_classifies_and_reports_rejections(tmp_path, monkeypatch, capsys):
+    good = tmp_path / "leaf.jpg"
+    good.write_bytes(leaf_like_bytes())
+    dark = tmp_path / "dark.jpg"
+    dark.write_bytes(encode(Image.new("RGB", (400, 400), (0, 0, 0))))
+    (tmp_path / "cnn.tflite").write_bytes(b"fake")
+    (tmp_path / "labels.txt").write_text("\n".join(LABELS), encoding="utf-8")
+    monkeypatch.setattr(cnn_service, "make_interpreter", lambda path: FakeInterpreter())
+    monkeypatch.setattr(cnn_service, "_classifier", None)
+
+    code = cnn_service.main([str(good), str(dark), "--model", str(tmp_path / "cnn.tflite"),
+                             "--labels", str(tmp_path / "labels.txt")])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert '"label": "late_blight"' in out
+    assert '"rejected": "too_dark"' in out
+
+
+def test_command_line_without_a_model_says_where_to_put_it(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cnn_service, "_classifier", None)
+    assert cnn_service.main(["x.jpg", "--model", str(tmp_path / "cnn.tflite"),
+                             "--labels", str(tmp_path / "labels.txt")]) == 1
+    assert "Model not found" in capsys.readouterr().out

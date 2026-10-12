@@ -280,3 +280,45 @@ def get_classifier() -> CNNClassifier:
             detail="The leaf-diagnosis model is not loaded on the server.",
         )
     return _classifier
+
+
+# --- command line: classify image files with the real model ---------------
+
+
+def main(argv=None) -> int:
+    """Run photos through the same checks and model as POST /images.
+
+        .\.venv\Scripts\python.exe -m backend.cnn_service path\to\leaf.jpg [more.jpg ...]
+    """
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(description="Classify leaf photos with the TFLite CNN.")
+    parser.add_argument("images", nargs="+", type=Path)
+    parser.add_argument("--model", type=Path, default=MODEL_PATH)
+    parser.add_argument("--labels", type=Path, default=LABELS_PATH)
+    args = parser.parse_args(argv)
+
+    if not load_classifier(args.model, args.labels):
+        print(f"Model not found: put cnn.tflite and labels.txt in {args.model.parent}")
+        return 1
+    for path in args.images:
+        try:
+            image = load_image(path.read_bytes())
+            quality = check_quality(image)
+        except ImageRejected as rejected:
+            print(json.dumps({"image": str(path), "rejected": rejected.reason, "message": rejected.message}))
+            continue
+        prediction = _classifier.predict(to_model_input(image))
+        print(json.dumps({
+            "image": str(path),
+            "label": prediction.label,
+            "confidence": round(prediction.confidence, 4),
+            "probabilities": {k: round(v, 4) for k, v in prediction.probabilities.items()},
+            "quality": {k: round(v, 1) for k, v in quality.items()},
+        }, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
