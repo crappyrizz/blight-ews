@@ -4,6 +4,7 @@ Run locally from the repo root:
     .\\.venv\\Scripts\\python.exe -m uvicorn backend.app:app --reload
 Interactive docs: http://127.0.0.1:8000/docs
 """
+import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
@@ -12,12 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend import auth, cnn_service, dashboard, fusion, hutton, ids, ingest, risk_job
+from backend import alerts, auth, cnn_service, dashboard, fusion, hutton, ids, ingest, risk_job
 from backend.config import REPO_ROOT, settings
 from backend.db import get_db
 from backend.models import Farmer, LeafImage, SensorNode, SensorReading, SymptomReport
 from backend.schemas import (
     MAX_BATCH_SIZE,
+    AlertOut,
     DiagnosisOut,
     FarmerLogin,
     FarmerOut,
@@ -310,6 +312,13 @@ def upload_image(
         raise
     db.refresh(leaf_image)
 
+    # SMS after the diagnosis is safely stored: a failed send can never lose it.
+    sms_alert = None
+    if node is not None:
+        alert = alerts.send_diagnosis_alert(db, node, diagnosis)
+        db.commit()
+        sms_alert = None if alert is None else alert.delivery_status
+
     return ImageUploadOut(
         image=LeafImageOut.model_validate(leaf_image),
         prediction=PredictionOut(
@@ -330,6 +339,7 @@ def upload_image(
             risk_level=fused.risk_level,
             summary=fused.summary,
             contributing_readings=contributions,
+            sms_alert=sms_alert,
         ),
     )
 
@@ -427,3 +437,54 @@ def list_symptom_reports(
         query = query.where(SymptomReport.node_id == node_id)
     return db.scalars(query.order_by(SymptomReport.onset_date.desc(),
                                      SymptomReport.reported_at.desc())).all()
+
+
+# --- SMS: status on demand, and Africa's Talking delivery reports (FR vii) ----
+
+
+@app.post("/nodes/{node_id}/status-sms", response_model=AlertOut, status_code=status.HTTP_201_CREATED)
+def status_sms(
+    node_id: str,
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+):
+    """Text the farmer the plot's status: only when the risk is judged and low.
+
+    409 (with a reason) when the risk is unknown, not low, or a status SMS
+    went out in the last hour; the app shows the dashboard instead.
+    """
+    node = auth.get_owned_or_404(db, SensorNode, node_id, farmer)
+    try:
+        alert = alerts.send_status(db, node, datetime.now(hutton.LOCAL_TZ).date())
+    except alerts.StatusRefused as refused:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"reason": refused.reason, "message": refused.message},
+        ) from None
+    db.commit()
+    db.refresh(alert)
+    return alert
+
+
+@app.post("/sms/delivery-report")
+def sms_delivery_report(
+    id: str = Form(..., description="Africa's Talking message id (ATXid_...)"),
+    status_: str = Form(..., alias="status"),
+    failureReason: str | None = Form(None),  # Africa's Talking's own field name
+    token: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Africa's Talking's delivery-report callback (form-encoded POST).
+
+    Fields used: id, status (e.g. Success, Failed, Rejected, Buffered, Sent),
+    failureReason (only on Failed/Rejected); phoneNumber, networkCode and
+    retryCount are also sent and ignored. An unknown id still answers 200, so
+    Africa's Talking does not keep retrying a message we did not send.
+    """
+    if settings.SMS_CALLBACK_TOKEN and not secrets.compare_digest(
+        token or "", settings.SMS_CALLBACK_TOKEN
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad token")
+    alert = alerts.apply_delivery_report(db, id, status_, failureReason)
+    db.commit()
+    return {"updated": alert is not None}

@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     AT_USERNAME: str
     AT_API_KEY: str
     AT_SENDER_ID: str = ""  # optional: empty means Africa's Talking's default sender
+    # On (the default): SMS are logged, not sent. Set SMS_DRY_RUN=false in .env to send.
+    SMS_DRY_RUN: bool = True
+    # Optional shared secret for the delivery-report callback URL
+    # (.../sms/delivery-report?token=...). Empty: no token required.
+    SMS_CALLBACK_TOKEN: str = ""
 
     # Farm site and local timezone
     SITE_LAT: float = -0.70

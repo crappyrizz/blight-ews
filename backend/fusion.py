@@ -94,6 +94,7 @@ class RiskContext:
     basis: str
     for_date: date | None  # the day the score describes
     note: str  # plain wording for the API response and the app
+    score_id: str | None = None  # the risk_scores row, when there is one
 
 
 @dataclass
@@ -153,6 +154,7 @@ def learned_risk(session: Session, node_id: str, on_date: date,
         basis=BASIS_LEARNED,
         for_date=on_date,
         note=f"Risk from the 24-hour forecast made from the readings of {issued}.",
+        score_id=row.score_id,
     )
 
 
@@ -179,7 +181,7 @@ def hutton_risk(session: Session, node_id: str, on_date: date,
     today = session.scalar(usable.where(RiskScore.for_date == on_date))
     if today is not None:
         return RiskContext(score=today.score, basis=BASIS_TODAY, for_date=on_date,
-                           note="Risk from today's readings (Hutton criteria).")
+                           note="Risk from today's readings (Hutton criteria).", score_id=today.score_id)
 
     earliest = on_date - timedelta(days=FALLBACK_DAYS)
     recent = session.scalars(
@@ -189,6 +191,7 @@ def hutton_risk(session: Session, node_id: str, on_date: date,
         return RiskContext(
             score=recent.score, basis=BASIS_FALLBACK, for_date=recent.for_date,
             note=f"No complete readings for {on_date}. Using the risk from {recent.for_date}.",
+            score_id=recent.score_id,
         )
 
     return RiskContext(

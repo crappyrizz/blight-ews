@@ -59,6 +59,12 @@ class Farmer(Base):
 
 class SensorNode(Base):
     __tablename__ = "sensor_nodes"
+    __table_args__ = (
+        CheckConstraint(
+            "last_risk_level IN ('low', 'medium', 'high')",
+            name="ck_sensor_nodes_last_risk_level",
+        ),
+    )
 
     node_id: Mapped[str] = mapped_column(ID, primary_key=True, default=id_default(ids.SENSOR_NODE))
     farmer_id: Mapped[str] = mapped_column(ID, ForeignKey("farmers.farmer_id"))
@@ -71,6 +77,10 @@ class SensorNode(Base):
     # Only the hash is stored, so a database dump does not hand over the key.
     # Null for a node that has not been issued a key yet.
     api_key_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The last JUDGED risk level the alerting saw (backend/alerts.py), so a
+    # high-risk SMS goes out only when the level CHANGES to high. Null until
+    # the first judged level; an unknown day never changes it.
+    last_risk_level: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
 
 class SensorReading(Base):
@@ -226,7 +236,8 @@ class Alert(Base):
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     delivery_status: Mapped[str] = mapped_column(String(30))
     # Null when the SMS provider rejected the message and returned no ID.
-    provider_message_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Indexed: delivery reports look alerts up by it.
+    provider_message_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
 
 
 class SymptomReport(Base):
