@@ -17,7 +17,7 @@ Sprint 1 set up the foundations the rest of the project builds on: a reproducibl
 | 2 | A clean, professionally organised codebase | Flat layout fixed in the README (`backend/`, `ml/`, `tools/`, `docs/`…). Domain logic commented for the viva. Ruff linting (pyflakes, import order, pyupgrade, bugbear) with **0 findings**; pre-commit hooks on every commit; 218 pytest tests. | `.\dev.ps1 lint`, `.\dev.ps1 test`, [ruff.toml](../ruff.toml), [.pre-commit-config.yaml](../.pre-commit-config.yaml), [backend/tests/](../backend/tests/) · Figure 1 |
 | 3 | All code under Git | GitHub repository; feature branches merged by pull request; `.gitignore` keeps data, models and secrets out. **History audited:** no `.env` was ever committed, none of the real secrets appears in any commit, and no file over 500 KB is in history. A pre-commit hook now refuses `.env` files and private keys. | [Commit history](https://github.com/crappyrizz/blight-ews/commits/main), [.gitignore](../.gitignore), [Git summary](#git-history) |
 | 4 | Data, databases, APIs and files prepared | **Database:** 10 tables from 3 Alembic migrations, seeded with an admin, a farmer and a sensor node. **API:** 9 endpoints: health, register/login, profile, nodes, sensor ingest (batch, idempotent, per-node keys), reading history, admin list. **Data:** 103,272 hourly weather values (2015–2026, none missing); 2,152 PlantVillage potato images in stratified 70/15/15 splits; field-photo register ready. All documented. | [docs/data_dictionary.md](data_dictionary.md), [docs/data_report.md](data_report.md), [docs/data_quality.md](data_quality.md), [docs/firmware_contract.md](firmware_contract.md), [alembic/versions/](../alembic/versions/) · Figures 4, 6 |
-| 5 | Appropriate automation for workflow and development management | GitHub Actions on every push to `main` and every pull request: **lint** job (pre-commit) and **pytest** job (PostgreSQL 16 service, migrations, full test suite). Local pre-commit hook. `dev.ps1` wraps every routine task. Data preparation is scripted and reproducible (fixed seed 42). | [.github/workflows/tests.yml](../.github/workflows/tests.yml), [CI runs](https://github.com/crappyrizz/blight-ews/actions), `.\dev.ps1 help` · Figures 2, 3, 5 |
+| 5 | Appropriate automation for workflow and development management | GitHub Actions on every push to `main` and every pull request: **lint** job (pre-commit) and **pytest** job (PostgreSQL 16 service, migrations, full test suite). Local pre-commit hook. `dev.ps1` wraps every routine task. Data preparation is scripted and reproducible (fixed seed 42). | [.github/workflows/tests.yml](../.github/workflows/tests.yml), [CI runs](https://github.com/crappyrizz/blight-ews/actions), `.\dev.ps1 help`, [Project board](https://github.com/users/crappyrizz/projects/1) · Figures 2, 3, 5 |
 
 ## Repository structure
 
@@ -68,8 +68,8 @@ blight-ews/
 
 | | |
 |---|---|
-| Commits on `main` | 15 (10 before this review, 4 from the review and the merge commit) |
-| Pull requests merged | 2: [#1 Data preparation](https://github.com/crappyrizz/blight-ews/pull/1) and {{PR}} (this review) |
+| Commits on `main` | 16 (10 before this review; 5 from the review, plus its merge commit) |
+| Pull requests merged | 2: [#1 Data preparation](https://github.com/crappyrizz/blight-ews/pull/1) and [#2 Sprint 1 review](https://github.com/crappyrizz/blight-ews/pull/2) (this review) |
 | Branches | `main`; `feature/data-prep` (merged in #1, due for deletion); `docs/sprint1-report` (this review); `feature/hutton-simulator` (Sprint 2 work in progress, not yet pushed) |
 | First / last commit | 21 Sep 2026 / 12 Oct 2026 |
 
@@ -93,7 +93,7 @@ blight-ews/
 
 - Workflow: [.github/workflows/tests.yml](../.github/workflows/tests.yml), two jobs (lint, pytest) on every push to `main` and every pull request.
 - Last run before this review, on `main`: [run 36561043189](https://github.com/crappyrizz/blight-ews/actions/runs/36561043189), passed (29 Sep 2026).
-- This review's pull request: {{RUN}}.
+- This review's pull request (#2): [run 38238458624](https://github.com/crappyrizz/blight-ews/actions/runs/38238458624), passed. Lint 19 s, pytest 1 min 16 s.
 - All runs: <https://github.com/crappyrizz/blight-ews/actions>
 
 > **Figure 2:** GitHub Actions run for this review's pull request, both jobs green.
@@ -165,7 +165,9 @@ Schema at Alembic revision `b181c764df90` (3 migrations). Full column reference:
 | 5 | SMS alerts through the Africa's Talking sandbox (`sms.py`) | High-risk and diagnosis alerts delivered and logged |
 | 6 | Re-fetch the latest archive days; collect the first field photos | Final weather record; start of the field evaluation set |
 
-> **Figure 3:** GitHub Project board for the project (Sprint 1 done, Sprint 2 to do).
+Tracked on the [Blight EWS Project board](https://github.com/users/crappyrizz/projects/1): the Sprint 1 deliverables and pull requests are under *Done*, and these six items are under *Todo*.
+
+> **Figure 3:** GitHub Project board (Sprint 1 done, Sprint 2 to do).
 
 ## How to reproduce this review
 
