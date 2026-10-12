@@ -1,5 +1,5 @@
 """Tests for ml/fetch_weather.py. No network: every HTTP call is faked."""
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 import pytest
@@ -93,8 +93,8 @@ def test_hourly_values_are_parsed_as_utc():
     rows, missing = fw.parse_hourly(payload(n_hours=2))
 
     assert missing == 0
-    assert rows[0]["timestamp"] == datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc)
-    assert rows[1]["timestamp"] == datetime(2026, 9, 1, 1, 0, tzinfo=timezone.utc)
+    assert rows[0]["timestamp"] == datetime(2026, 9, 1, 0, 0, tzinfo=UTC)
+    assert rows[1]["timestamp"] == datetime(2026, 9, 1, 1, 0, tzinfo=UTC)
     assert rows[0]["temperature"] == 12.0
     assert rows[0]["humidity"] == 90.0
 
@@ -164,6 +164,16 @@ def test_the_same_hour_from_two_sources_is_kept_separately(db_session):
     assert (stored, duplicates) == (3, 0)
     assert stored_count(db_session, fw.SOURCE_ARCHIVE) == 3
     assert stored_count(db_session, fw.SOURCE_HISTORICAL_FORECAST) == 3
+
+
+def test_a_full_leap_year_can_be_stored_in_one_call(db_session):
+    """8,784 rows x 8 columns is over PostgreSQL's 65,535-parameter limit."""
+    rows, _ = fw.parse_hourly(payload(n_hours=366 * 24))
+
+    stored, duplicates = fw.store_rows(db_session, fw.SOURCE_ARCHIVE, LAT, LON, rows)
+
+    assert (stored, duplicates) == (366 * 24, 0)
+    assert stored_count(db_session) == 366 * 24
 
 
 def test_storing_nothing_is_harmless(db_session):
@@ -366,13 +376,13 @@ def test_days_shortcut_counts_back_from_the_end_date():
 def test_archive_end_date_defaults_to_five_days_ago():
     args = fw.parse_args(["--source", "archive", "--days", "7"])
 
-    assert args.end == datetime.now(timezone.utc).date() - timedelta(days=fw.ARCHIVE_LAG_DAYS)
+    assert args.end == datetime.now(UTC).date() - timedelta(days=fw.ARCHIVE_LAG_DAYS)
 
 
 def test_historical_forecast_end_date_defaults_to_today():
     args = fw.parse_args(["--source", "historical_forecast", "--days", "7"])
 
-    assert args.end == datetime.now(timezone.utc).date()
+    assert args.end == datetime.now(UTC).date()
 
 
 def test_site_coordinates_are_the_default():

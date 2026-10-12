@@ -28,7 +28,7 @@ import csv
 import logging
 import sys
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -168,13 +168,13 @@ def parse_hourly(payload: dict) -> tuple[list[dict], int]:
 
     rows = []
     missing = 0
-    for moment, temperature, humidity in zip(times, temperatures, humidities):
+    for moment, temperature, humidity in zip(times, temperatures, humidities, strict=False):
         if temperature is None or humidity is None:
             missing += 1
             continue
         rows.append({
             # timezone=UTC means the strings carry no offset; they are UTC.
-            "timestamp": datetime.fromisoformat(moment).replace(tzinfo=timezone.utc),
+            "timestamp": datetime.fromisoformat(moment).replace(tzinfo=UTC),
             "temperature": float(temperature),
             "humidity": float(humidity),
         })
@@ -197,8 +197,13 @@ def save_csv(
             hourly.get("time") or [],
             hourly.get(TEMPERATURE_VARIABLE) or [],
             hourly.get(HUMIDITY_VARIABLE) or [],
+            strict=False,
         ))
     return path
+
+
+# Rows per INSERT: 8 columns each, well under PostgreSQL's 65,535-parameter cap.
+INSERT_SLICE_ROWS = 5000
 
 
 def store_rows(
@@ -228,13 +233,17 @@ def store_rows(
         for row in rows
     ]
 
-    statement = (
-        pg_insert(WeatherReading)
-        .values(values)
-        .on_conflict_do_nothing(constraint=WEATHER_CONFLICT)
-        .returning(WeatherReading.weather_id)
-    )
-    stored = len(session.scalars(statement).all())
+    # PostgreSQL allows at most 65,535 bind parameters per statement, and a
+    # full year is 8,760 rows x 8 columns = 70,080, so insert in slices.
+    stored = 0
+    for i in range(0, len(values), INSERT_SLICE_ROWS):
+        statement = (
+            pg_insert(WeatherReading)
+            .values(values[i:i + INSERT_SLICE_ROWS])
+            .on_conflict_do_nothing(constraint=WEATHER_CONFLICT)
+            .returning(WeatherReading.weather_id)
+        )
+        stored += len(session.scalars(statement).all())
     session.commit()
     return stored, len(values) - stored
 
@@ -300,7 +309,7 @@ def fetch_range(
 
 def default_end(source: str) -> date:
     """Latest date worth asking for: ERA5 lags about 5 days behind today."""
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     if source == SOURCE_ARCHIVE:
         return today - timedelta(days=ARCHIVE_LAG_DAYS)
     return today
