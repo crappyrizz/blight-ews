@@ -6,6 +6,22 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The same hooks as the local git hook: ruff, whitespace, YAML/TOML,
+      # large files, private keys, and no .env.
+      - name: pre-commit (ruff and repo checks)
+        run: |
+          pip install pre-commit==4.6.2
+          pre-commit run --all-files --show-diff-on-failure
+
   pytest:
     runs-on: ubuntu-latest
 

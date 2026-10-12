@@ -14,7 +14,7 @@ validated on its own and rejects are reported back by position.
 
 The full contract is written up in docs/firmware_contract.md.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pydantic import ValidationError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -109,7 +109,7 @@ def ingest_batch(session: Session, node: SensorNode, raw_readings: list) -> Inge
     # last_sync_time is when the node was last heard from, not the timestamp
     # of the newest reading: a node flushing a week-old buffer has still just
     # been in touch, and that is what the dashboard needs to show.
-    node.last_sync_time = datetime.now(timezone.utc)
+    node.last_sync_time = datetime.now(UTC)
 
     session.commit()
     return IngestResult(accepted=accepted, duplicates=duplicates, rejected=rejected)

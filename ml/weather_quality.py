@@ -20,8 +20,8 @@ import argparse
 import calendar
 import logging
 import sys
-from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta, timezone
+from collections import Counter
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
@@ -75,7 +75,7 @@ def summarise(rows) -> dict:
     out_of_range = []
 
     for row in rows:
-        moment_utc = row.timestamp.astimezone(timezone.utc)
+        moment_utc = row.timestamp.astimezone(UTC)
         hours_per_month[(moment_utc.year, moment_utc.month)] += 1
 
         local_day = row.timestamp.astimezone(LOCAL_TZ).date()
@@ -88,8 +88,8 @@ def summarise(rows) -> dict:
         elif not (low_h <= row.humidity <= high_h):
             out_of_range.append((moment_utc, "humidity", row.humidity))
 
-    first = rows[0].timestamp.astimezone(timezone.utc)
-    last = rows[-1].timestamp.astimezone(timezone.utc)
+    first = rows[0].timestamp.astimezone(UTC)
+    last = rows[-1].timestamp.astimezone(UTC)
 
     # Expected hours per month, trimmed to the covered range at both ends.
     missing_per_month = {}
@@ -121,7 +121,7 @@ def summarise(rows) -> dict:
 def expected_hours_in_month(year: int, month: int, first: datetime, last: datetime) -> int:
     """Hours the month should hold, counting only the part inside the covered range."""
     days_in_month = calendar.monthrange(year, month)[1]
-    month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+    month_start = datetime(year, month, 1, tzinfo=UTC)
     month_end = month_start + timedelta(days=days_in_month)
 
     start = max(month_start, first.replace(minute=0, second=0, microsecond=0))

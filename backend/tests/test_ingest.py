@@ -1,5 +1,5 @@
 """Tests for sensor ingest: the contract the ESP32 firmware will follow."""
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -9,7 +9,7 @@ from backend.schemas import MAX_BATCH_SIZE
 
 # Relative to now, so a 500-reading batch (about 21 days of hourly data)
 # stays in the past however long after today the tests are run.
-BASE = (datetime.now(timezone.utc) - timedelta(days=30)).replace(
+BASE = (datetime.now(UTC) - timedelta(days=30)).replace(
     minute=0, second=0, microsecond=0
 )
 NODE_KEY = "test-node-key-abcdefghijklmnop"
@@ -90,7 +90,7 @@ def test_out_of_order_timestamps_are_accepted(client, db_session, node):
 
 def test_old_buffered_readings_are_accepted(client, node):
     """The node may be offline for days; its backlog is still valid."""
-    old = (datetime.now(timezone.utc) - timedelta(days=9)).isoformat().replace("+00:00", "Z")
+    old = (datetime.now(UTC) - timedelta(days=9)).isoformat().replace("+00:00", "Z")
 
     response = post(client, node, [{"timestamp": old, "temperature": 11.0, "humidity": 91.0}])
 
@@ -197,7 +197,7 @@ def test_range_limits_themselves_are_allowed(client, node, temperature):
 
 
 def test_future_timestamp_is_rejected(client, node):
-    future = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+    future = (datetime.now(UTC) + timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
 
     response = post(client, node, [{"timestamp": future, "temperature": 12.0, "humidity": 90.0}])
 
@@ -207,7 +207,7 @@ def test_future_timestamp_is_rejected(client, node):
 
 def test_small_clock_drift_is_tolerated(client, node):
     """Up to 10 minutes ahead is allowed, so a slightly fast node still works."""
-    soon = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+    soon = (datetime.now(UTC) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
 
     response = post(client, node, [{"timestamp": soon, "temperature": 12.0, "humidity": 90.0}])
 

@@ -4,7 +4,7 @@ Run locally from the repo root:
     .\\.venv\\Scripts\\python.exe -m uvicorn backend.app:app --reload
 Interactive docs: http://127.0.0.1:8000/docs
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from sqlalchemy import select
@@ -75,7 +75,7 @@ def register(payload: FarmerRegister, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="That phone number is already registered",
-        )
+        ) from None
     db.refresh(farmer)
     return farmer
 
@@ -135,7 +135,7 @@ def get_node(
 def _as_utc(moment: datetime) -> datetime:
     """Treat a query time with no timezone as UTC, so ranges are unambiguous."""
     if moment.tzinfo is None:
-        return moment.replace(tzinfo=timezone.utc)
+        return moment.replace(tzinfo=UTC)
     return moment
 
 

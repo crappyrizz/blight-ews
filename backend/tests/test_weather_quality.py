@@ -1,5 +1,5 @@
 """Tests for ml/weather_quality.py, on a small fixture of hourly rows."""
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from ml import weather_quality as wq
 
@@ -18,7 +18,7 @@ def hours(start: datetime, count: int, **values) -> list[Row]:
 
 
 # Start at 00:00 UTC, which is 03:00 local (Africa/Nairobi, UTC+3).
-START = datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc)
+START = datetime(2026, 3, 1, 0, 0, tzinfo=UTC)
 
 
 def test_empty_input_reports_nothing_rather_than_failing():
@@ -60,7 +60,7 @@ def test_a_month_with_no_gaps_reports_zero_missing():
 
 def test_partial_months_at_the_ends_are_not_counted_as_missing():
     """Coverage starting mid-month must not look like a huge gap."""
-    rows = hours(datetime(2026, 3, 20, 0, 0, tzinfo=timezone.utc), 24 * 5)
+    rows = hours(datetime(2026, 3, 20, 0, 0, tzinfo=UTC), 24 * 5)
 
     summary = wq.summarise(rows)
 

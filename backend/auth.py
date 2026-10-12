@@ -15,7 +15,7 @@ Three things live here:
    repeated in each endpoint where it could be got wrong.
 """
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from fastapi import Depends, Header, HTTPException, Path, status
@@ -93,7 +93,7 @@ def verify_node_key(key: str, key_hash: str) -> bool:
 def create_access_token(farmer_id: str, expires_minutes: int | None = None) -> str:
     """Sign a token for this farmer. Expiry comes from config unless given."""
     minutes = settings.JWT_EXPIRE_MINUTES if expires_minutes is None else expires_minutes
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload = {
         "sub": farmer_id,  # the subject: who this token is for
         "iat": now,
@@ -111,9 +111,9 @@ def decode_access_token(token: str) -> dict:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired, please log in again",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
     except jwt.InvalidTokenError:
-        raise CREDENTIALS_ERROR
+        raise CREDENTIALS_ERROR from None
 
 
 # --- logging in --------------------------------------------------------

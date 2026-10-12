@@ -6,7 +6,7 @@ is normalised to one canonical form, +2547XXXXXXXX or +2541XXXXXXXX, no
 matter how it was typed.
 """
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -137,7 +137,7 @@ class ReadingIn(BaseModel):
             # aggregation depends on knowing the instant exactly.
             raise ValueError("timestamp must include a timezone, e.g. 2026-09-22T03:00:00Z")
 
-        limit = datetime.now(timezone.utc) + timedelta(minutes=FUTURE_TOLERANCE_MINUTES)
+        limit = datetime.now(UTC) + timedelta(minutes=FUTURE_TOLERANCE_MINUTES)
         if value > limit:
             raise ValueError(
                 f"timestamp is more than {FUTURE_TOLERANCE_MINUTES} minutes in the future; "
@@ -145,7 +145,7 @@ class ReadingIn(BaseModel):
             )
         # Old timestamps are fine: the node buffers readings while offline and
         # flushes them when the network returns.
-        return value.astimezone(timezone.utc)
+        return value.astimezone(UTC)
 
 
 class ReadingBatch(BaseModel):
