@@ -14,7 +14,8 @@ Two rules here follow from how gaps are recorded:
 
 Input is a list of daily summaries, oldest first, each a dict or object with:
 for_date, status, valid_hours, hutton_day, min_temperature,
-hours_at_high_humidity  (i.e. what backend.hutton.DaySummary holds).
+hours_at_high_humidity  (backend.hutton's daily table, where the last two
+are called tmin and humid_hours).
 """
 from dataclasses import asdict, is_dataclass
 from datetime import timedelta
