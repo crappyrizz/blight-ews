@@ -13,3 +13,7 @@ tensorflow-datasets==4.9.10
 # so the dataset build fails with ModuleNotFoundError without them.
 importlib_resources
 etils[epath]
+
+# Running ml/train_cnn.ipynb outside Colab (Colab already has these), e.g. a quick local check.
+scikit-learn
+matplotlib

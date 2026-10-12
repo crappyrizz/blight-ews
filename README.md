@@ -144,6 +144,20 @@ Notes on the image export:
   Same CC0 source, and this path needs no TensorFlow. Only the non-augmented copy in the archive is used: the augmented images are rotations and colour shifts of the originals, and including them would put near-duplicates on both sides of the train/test split.
 - The TFDS path (`prepare-images` with no `--from-archive`) is still there for when the download works, and needs `pip install -r requirements-ml.txt`. On Windows, TensorFlow's very long internal paths break that install inside a deeply nested project folder; either enable Windows long-path support or install it into a venv at a short path (e.g. `C:\blightml`) and run the script with that interpreter.
 
+## CNN training (ml/train_cnn.ipynb) and the lab-to-field check (ml/eval_cnn.py)
+
+1. Open `ml/train_cnn.ipynb` in Google Colab with a GPU runtime and choose *Runtime → Run all*. It loads PlantVillage's potato classes, rebuilds the split and asserts it is identical to `data/splits/*.csv`, trains MobileNetV2 in two phases, evaluates on the test set, exports TFLite, and downloads `cnn_outputs.zip`. The markdown cell at the top explains every step.
+2. Unzip: `cnn.tflite` and `labels.txt` into `models/`, and `cnn_metrics.json`, `confusion_matrix.png` and `training_curves.png` into `docs/`.
+3. Compare lab and field performance with the same model and preprocessing:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m ml.eval_cnn    # needs requirements-ml.txt; writes docs/cnn_domain_gap.md
+   ```
+
+- **Mendeley and TFDS.** Mendeley answers Python's HTTP client with 403 whatever the headers, while `curl` gets the file. So the notebook tries `tfds` first, then falls back to downloading the same archive with `curl` and reading it with the rule TFDS's `plant_village` builder uses (same files, labels and filenames).
+- **Matching the split.** TFDS records each image's original archive filename. `ml/prepare_images.py` numbered images in sorted filename order and dropped none, so the notebook maps them back to the split-CSV names exactly. `backend/tests/test_train_cnn_notebook.py` checks that the rebuild equals the committed CSVs.
+- **Model input:** float32 `[1, 224, 224, 3]`, RGB, bilinear antialiased resize, then `x / 127.5 - 1` (MobileNetV2's `preprocess_input`). Outputs are in `labels.txt` order: `early_blight`, `healthy`, `late_blight`.
+
 ## Continuous integration
 
 [.github/workflows/tests.yml](.github/workflows/tests.yml) runs on every push to `main` and every pull request, as two jobs:
