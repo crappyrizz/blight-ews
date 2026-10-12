@@ -23,6 +23,13 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
 PyJWT==2.15.1
 
+# Leaf photos: multipart uploads (POST /images) and the TFLite runtime for the
+# CNN (backend/cnn_service.py). ai-edge-litert is Google's standalone TFLite
+# runtime ("LiteRT"): ~21 MB, with Windows and Linux wheels for Python 3.11,
+# instead of the ~330 MB tensorflow-cpu.
+python-multipart==0.0.32
+ai-edge-litert==2.3.0
+
 # HTTP client: Open-Meteo fetching (ml/fetch_weather.py) and the test client
 httpx==0.28.1
 

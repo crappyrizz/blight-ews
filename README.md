@@ -85,6 +85,14 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 - Keep code plain and readable. This is a student project that gets defended in a viva: favour clarity over cleverness, and comment the domain logic (Hutton, fusion) so I can explain it.
 - Commit to git at the end of each task with a clear message.
 
+## Leaf images and the CNN (FR iv, v)
+
+- `POST /images` (farmer JWT, multipart: `file`, optional `capture_date` with timezone) stores the photo under `data/uploads/<farmer_id>/<image_id>.<ext>`, adds a `leaf_images` row, runs the CNN and returns `{"image": {...}, "prediction": {"label", "confidence", "probabilities"}}`. Fusion with the weather risk is a marked hook in `backend/app.py`, not built yet.
+- **Quality check first.** A photo the model cannot judge fairly is refused with 422 and `{"reason", "message"}`, and nothing is stored, so the app can ask for a retake. Reasons: `unreadable`, `too_small` (short side < 224 px), `too_dark` (mean grey < 40), `too_blurry` (variance of the Laplacian < 50). The thresholds are named constants in `backend/cnn_service.py`, calibrated so that none of the 2,152 PlantVillage images is rejected; re-check them once field photos exist.
+- `GET /images/{image_id}`: own images only (404 otherwise, like nodes).
+- The model (`models/cnn.tflite`, `models/labels.txt`) is loaded once at startup. If it is missing, the API still runs and `POST /images` answers 503.
+- Preprocessing mirrors training: RGB, EXIF rotation applied, 224×224 bilinear antialiased resize done in floating point (matches TensorFlow's to within 0.004 grey levels), then `x / 127.5 - 1`. The one unavoidable difference: training decoded JPEGs with TensorFlow's fast IDCT and Pillow uses the accurate one, so pixels can differ by up to 4/255 (about 1/255 on average).
+
 ## Sensor ingest (FR ii)
 
 - `POST /nodes/{node_id}/readings` takes a **batch** (max 500) and authenticates with the node's own `X-Node-Key` header, never a farmer JWT. Replaying a batch is harmless: a duplicate `(node_id, timestamp)` is skipped via `INSERT … ON CONFLICT DO NOTHING` and counted as a duplicate, not an error. Out-of-order and old timestamps are accepted, since the node buffers while offline. Rows are validated one by one (temperature -10…50 °C, humidity 0…100%, timestamp no more than 10 minutes in the future, timezone required) and rejects are reported by position, so one bad reading does not cost the node its buffer. Response: `{"accepted": n, "duplicates": n, "rejected": [{"index": i, "reason": "…"}]}`. `last_sync_time` records when the node was last heard from, not the newest reading.

@@ -179,3 +179,33 @@ class ReadingOut(BaseModel):
     temperature: float
     humidity: float
     leaf_wetness: float | None
+
+
+# --- leaf images and the CNN (FR iv, v) ---------------------------------
+
+
+class PredictionOut(BaseModel):
+    """The CNN's raw answer, before any fusion with the weather risk."""
+
+    label: str  # most probable class: early_blight, healthy or late_blight
+    confidence: float  # probability of that class, 0-1
+    probabilities: dict[str, float]  # every class, in labels.txt order
+
+
+class LeafImageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    image_id: str
+    farmer_id: str
+    capture_date: datetime
+
+    @field_validator("capture_date")
+    @classmethod
+    def _in_utc(cls, value: datetime) -> datetime:
+        # Stored as timestamptz; always answered in UTC, like sensor readings.
+        return value.astimezone(UTC)
+
+
+class ImageUploadOut(BaseModel):
+    image: LeafImageOut
+    prediction: PredictionOut
