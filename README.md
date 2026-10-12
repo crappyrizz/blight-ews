@@ -109,7 +109,7 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 
 | Source | Endpoint | Coverage | Notes |
 |---|---|---|---|
-| `archive` | `archive-api.open-meteo.com/v1/archive` (ERA5) | 1940 → today−5 days | The long, consistent record; ~5-day publication lag, so it never covers this morning |
+| `archive` | `archive-api.open-meteo.com/v1/archive`, pinned to `models=era5_land` | 1950 → today−~6 days | The long, consistent record (ERA5-Land, ~9 km); publication lag, so it never covers this morning |
 | `historical_forecast` | `historical-forecast-api.open-meteo.com/v1/forecast` | ~2022 → today | What the models predicted at the time; needed for the Hutton-on-forecast benchmark |
 
 - Free, no API key (600 calls/min, 10,000/day). Fetched in yearly chunks with retry and backoff; 429/5xx are retried, a 400 is not.
@@ -117,6 +117,21 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 - Hours the API returns as null are dropped, never interpolated; `hutton.py` then decides whether the day still has its 20 of 24 values.
 - Raw responses are also written to `data/weather/*.csv` (gitignored) for inspection.
 - **`forecast_issued_at` stays null.** The historical forecast API is a continuous series stitched from the first hours of successive model runs and exposes no per-hour issue time. A true fixed-lead-time forecast needs the Previous Runs API (`*_previous_day1/2`, archived from 2024) or the Single Runs API (`&run=`).
+
+- **Why the archive model is pinned.** Left to its default (`best_match`), the archive API serves ECMWF IFS forecast data here from about 2017-18 (identical, hour for hour, to the historical-forecast API) and other data before that. The record would switch source partway through, and the Hutton-on-forecast benchmark would be scored against itself.
+
+## Learned risk model (ml/build_features.py, ml/train_risk.py, ml/eval_risk.py, backend/risk_model.py)
+
+```powershell
+.\.venv\Scripts\python.exe -m ml.train_risk   # models/risk_model_24h.joblib, risk_model_48h.joblib
+.\.venv\Scripts\python.exe -m ml.eval_risk    # docs/risk_eval.md (+ JSON, 3 PNG figures)
+```
+
+- **Targets** per local day D (Hutton rule from `backend/hutton.py`, on ERA5-Land): `y24` = D+1 is a Hutton day; `y48` = a Hutton period on D+1 or D+2. Unknown targets are dropped, never counted as negatives.
+- **No leakage:** features for D use only hours up to the end of D. `backend/tests/test_build_features.py` alters or deletes every hour after D and requires day D's features not to move; it catches a planted look-ahead lag and a centred rolling window.
+- **Time-ordered split, never shuffled:** test = the most recent 12 months, validation = the 12 before, train = the rest, with a 2-day embargo before each boundary (y48 looks two days ahead). The grid and the decision threshold are chosen on validation; the model is refit on train + validation and scored once on test against persistence, monthly climatology and Hutton-on-forecast, with block-bootstrap intervals.
+- **Serving:** `backend.risk_model.predict_for_node(node_id, for_date, data_source)` builds day D's features from the database with the same functions as training (a test checks they are identical) and returns `p24` / `p48`, or `None` when day D could not be judged.
+- scikit-learn and joblib are pinned exactly in `requirements.txt`: a saved model must be loaded with the version that trained it. The `.joblib` files are gitignored; re-create them with `ml.train_risk`.
 
 ## Data preparation and documentation
 

@@ -33,6 +33,11 @@ ai-edge-litert==2.3.0
 # HTTP client: Open-Meteo fetching (ml/fetch_weather.py) and the test client
 httpx==0.28.1
 
+# Learned risk model (ml/train_risk.py, backend/risk_model.py). Pinned exactly:
+# a saved model must be loaded with the scikit-learn version that trained it.
+scikit-learn==1.9.1
+joblib==1.6.0
+
 # Data preparation and reporting
 pandas==3.0.6
 matplotlib==3.11.2
