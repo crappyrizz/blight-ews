@@ -4,23 +4,27 @@ Run locally from the repo root:
     .\\.venv\\Scripts\\python.exe -m uvicorn backend.app:app --reload
 Interactive docs: http://127.0.0.1:8000/docs
 """
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend import auth, ingest
-from backend.config import settings
+from backend import auth, cnn_service, ids, ingest
+from backend.config import REPO_ROOT, settings
 from backend.db import get_db
-from backend.models import Farmer, SensorNode, SensorReading
+from backend.models import Farmer, LeafImage, SensorNode, SensorReading
 from backend.schemas import (
     MAX_BATCH_SIZE,
     FarmerLogin,
     FarmerOut,
     FarmerRegister,
+    ImageUploadOut,
     IngestResult,
+    LeafImageOut,
+    PredictionOut,
     ReadingBatch,
     ReadingOut,
     SensorNodeOut,
@@ -31,7 +35,21 @@ from backend.schemas import (
 # about 8,760 rows, so this covers any realistic dashboard query).
 MAX_READINGS_PER_QUERY = 10_000
 
-app = FastAPI(title="Blight Early-Warning System")
+# Leaf photos are stored here, one folder per farmer (gitignored with data/).
+UPLOAD_DIR = REPO_ROOT / "data" / "uploads"
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # a full-resolution phone photo is 3-8 MB
+SAVED_EXTENSIONS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Load the CNN once, not per request. If the model files are missing the
+    # API still starts; only image upload answers 503.
+    cnn_service.load_classifier()
+    yield
+
+
+app = FastAPI(title="Blight Early-Warning System", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -195,3 +213,106 @@ def list_farmers(
 ):
     """All registered farmers. Admin only."""
     return db.scalars(select(Farmer).order_by(Farmer.created_at)).all()
+
+
+# --- leaf images and the CNN (FR iv, v) --------------------------------
+
+
+def _stored_path(path) -> str:
+    """Repo-relative path with forward slashes, as recorded in leaf_images."""
+    try:
+        return path.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
+
+
+@app.post("/images", response_model=ImageUploadOut, status_code=status.HTTP_201_CREATED)
+def upload_image(
+    file: UploadFile = File(..., description="The leaf photo (JPEG or PNG)"),
+    capture_date: datetime | None = Form(
+        None, description="When the photo was taken, with timezone; default: now"
+    ),
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+    classifier: cnn_service.CNNClassifier = Depends(cnn_service.get_classifier),
+):
+    """Upload a leaf photo, store it, and return the CNN's raw prediction.
+
+    A photo the model cannot judge fairly (unreadable, too small, too dark,
+    too blurry) gets 422 with a reason code and a message the app can show,
+    and nothing is stored, so the farmer simply retakes it.
+    """
+    if capture_date is not None and capture_date.tzinfo is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="capture_date needs a timezone, e.g. 2026-10-12T09:30:00+03:00",
+        )
+
+    data = file.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"The photo is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+        )
+
+    try:
+        image = cnn_service.load_image(data)
+        cnn_service.check_quality(image)
+    except cnn_service.ImageRejected as rejected:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"reason": rejected.reason, "message": rejected.message},
+        ) from None
+
+    prediction = classifier.predict(cnn_service.to_model_input(image))
+
+    # Keep the file exactly as uploaded; the model saw a resized copy.
+    image_id = ids.new_id(ids.LEAF_IMAGE)
+    extension = SAVED_EXTENSIONS.get(cnn_service.image_format(data), ".img")
+    farmer_dir = UPLOAD_DIR / farmer.farmer_id
+    farmer_dir.mkdir(parents=True, exist_ok=True)
+    path = farmer_dir / f"{image_id}{extension}"
+    path.write_bytes(data)
+
+    leaf_image = LeafImage(
+        image_id=image_id,
+        farmer_id=farmer.farmer_id,
+        file_path=_stored_path(path),
+        capture_date=capture_date or datetime.now(UTC),
+    )
+    db.add(leaf_image)
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        path.unlink(missing_ok=True)  # no row, so no orphan file either
+        raise
+    db.refresh(leaf_image)
+
+    # ===================== FUSION HOOK (later prompt) =====================
+    # This is where the weather-based risk score r is combined with the CNN:
+    # fusion.resolve_risk() picks today's risk for the farmer's node,
+    # tau(r) shifts the late-blight threshold, and a diagnosis_results row is
+    # written (label, confidence, probabilities, risk_score_used,
+    # threshold_used, risk_level, late_blight_flagged). Until then the raw
+    # prediction below is returned as-is and no diagnosis row is stored.
+    # ======================================================================
+
+    return ImageUploadOut(
+        image=LeafImageOut.model_validate(leaf_image),
+        prediction=PredictionOut(
+            label=prediction.label,
+            confidence=prediction.confidence,
+            probabilities=prediction.probabilities,
+        ),
+    )
+
+
+@app.get("/images/{image_id}", response_model=LeafImageOut)
+def get_image(
+    image_id: str,
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+):
+    """One of the farmer's leaf images (404 for anyone else's, as for nodes)."""
+    return auth.get_owned_or_404(db, LeafImage, image_id, farmer)

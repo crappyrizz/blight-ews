@@ -85,6 +85,14 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 - Keep code plain and readable. This is a student project that gets defended in a viva: favour clarity over cleverness, and comment the domain logic (Hutton, fusion) so I can explain it.
 - Commit to git at the end of each task with a clear message.
 
+## Leaf images and the CNN (FR iv, v)
+
+- `POST /images` (farmer JWT, multipart: `file`, optional `capture_date` with timezone) stores the photo under `data/uploads/<farmer_id>/<image_id>.<ext>`, adds a `leaf_images` row, runs the CNN and returns `{"image": {...}, "prediction": {"label", "confidence", "probabilities"}}`. Fusion with the weather risk is a marked hook in `backend/app.py`, not built yet.
+- **Quality check first.** A photo the model cannot judge fairly is refused with 422 and `{"reason", "message"}`, and nothing is stored, so the app can ask for a retake. Reasons: `unreadable`, `too_small` (short side < 224 px), `too_dark` (mean grey < 40), `too_blurry` (variance of the Laplacian < 50). The thresholds are named constants in `backend/cnn_service.py`, calibrated so that none of the 2,152 PlantVillage images is rejected; re-check them once field photos exist.
+- `GET /images/{image_id}`: own images only (404 otherwise, like nodes).
+- The model (`models/cnn.tflite`, `models/labels.txt`) is loaded once at startup. If it is missing, the API still runs and `POST /images` answers 503.
+- Preprocessing mirrors training: RGB, EXIF rotation applied, 224×224 bilinear antialiased resize done in floating point (matches TensorFlow's to within 0.004 grey levels), then `x / 127.5 - 1`. The one unavoidable difference: training decoded JPEGs with TensorFlow's fast IDCT and Pillow uses the accurate one, so pixels can differ by up to 4/255 (about 1/255 on average).
+
 ## Sensor ingest (FR ii)
 
 - `POST /nodes/{node_id}/readings` takes a **batch** (max 500) and authenticates with the node's own `X-Node-Key` header, never a farmer JWT. Replaying a batch is harmless: a duplicate `(node_id, timestamp)` is skipped via `INSERT … ON CONFLICT DO NOTHING` and counted as a duplicate, not an error. Out-of-order and old timestamps are accepted, since the node buffers while offline. Rows are validated one by one (temperature -10…50 °C, humidity 0…100%, timestamp no more than 10 minutes in the future, timezone required) and rejects are reported by position, so one bad reading does not cost the node its buffer. Response: `{"accepted": n, "duplicates": n, "rejected": [{"index": i, "reason": "…"}]}`. `last_sync_time` records when the node was last heard from, not the newest reading.
@@ -101,7 +109,7 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 
 | Source | Endpoint | Coverage | Notes |
 |---|---|---|---|
-| `archive` | `archive-api.open-meteo.com/v1/archive` (ERA5) | 1940 → today−5 days | The long, consistent record; ~5-day publication lag, so it never covers this morning |
+| `archive` | `archive-api.open-meteo.com/v1/archive`, pinned to `models=era5_land` | 1950 → today−~6 days | The long, consistent record (ERA5-Land, ~9 km); publication lag, so it never covers this morning |
 | `historical_forecast` | `historical-forecast-api.open-meteo.com/v1/forecast` | ~2022 → today | What the models predicted at the time; needed for the Hutton-on-forecast benchmark |
 
 - Free, no API key (600 calls/min, 10,000/day). Fetched in yearly chunks with retry and backoff; 429/5xx are retried, a 400 is not.
@@ -109,6 +117,21 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 - Hours the API returns as null are dropped, never interpolated; `hutton.py` then decides whether the day still has its 20 of 24 values.
 - Raw responses are also written to `data/weather/*.csv` (gitignored) for inspection.
 - **`forecast_issued_at` stays null.** The historical forecast API is a continuous series stitched from the first hours of successive model runs and exposes no per-hour issue time. A true fixed-lead-time forecast needs the Previous Runs API (`*_previous_day1/2`, archived from 2024) or the Single Runs API (`&run=`).
+
+- **Why the archive model is pinned.** Left to its default (`best_match`), the archive API serves ECMWF IFS forecast data here from about 2017-18 (identical, hour for hour, to the historical-forecast API) and other data before that. The record would switch source partway through, and the Hutton-on-forecast benchmark would be scored against itself.
+
+## Learned risk model (ml/build_features.py, ml/train_risk.py, ml/eval_risk.py, backend/risk_model.py)
+
+```powershell
+.\.venv\Scripts\python.exe -m ml.train_risk   # models/risk_model_24h.joblib, risk_model_48h.joblib
+.\.venv\Scripts\python.exe -m ml.eval_risk    # docs/risk_eval.md (+ JSON, 3 PNG figures)
+```
+
+- **Targets** per local day D (Hutton rule from `backend/hutton.py`, on ERA5-Land): `y24` = D+1 is a Hutton day; `y48` = a Hutton period on D+1 or D+2. Unknown targets are dropped, never counted as negatives.
+- **No leakage:** features for D use only hours up to the end of D. `backend/tests/test_build_features.py` alters or deletes every hour after D and requires day D's features not to move; it catches a planted look-ahead lag and a centred rolling window.
+- **Time-ordered split, never shuffled:** test = the most recent 12 months, validation = the 12 before, train = the rest, with a 2-day embargo before each boundary (y48 looks two days ahead). The grid and the decision threshold are chosen on validation; the model is refit on train + validation and scored once on test against persistence, monthly climatology and Hutton-on-forecast, with block-bootstrap intervals.
+- **Serving:** `backend.risk_model.predict_for_node(node_id, for_date, data_source)` builds day D's features from the database with the same functions as training (a test checks they are identical) and returns `p24` / `p48`, or `None` when day D could not be judged.
+- scikit-learn and joblib are pinned exactly in `requirements.txt`: a saved model must be loaded with the version that trained it. The `.joblib` files are gitignored; re-create them with `ml.train_risk`.
 
 ## Data preparation and documentation
 
@@ -143,6 +166,20 @@ Notes on the image export:
 
   Same CC0 source, and this path needs no TensorFlow. Only the non-augmented copy in the archive is used: the augmented images are rotations and colour shifts of the originals, and including them would put near-duplicates on both sides of the train/test split.
 - The TFDS path (`prepare-images` with no `--from-archive`) is still there for when the download works, and needs `pip install -r requirements-ml.txt`. On Windows, TensorFlow's very long internal paths break that install inside a deeply nested project folder; either enable Windows long-path support or install it into a venv at a short path (e.g. `C:\blightml`) and run the script with that interpreter.
+
+## CNN training (ml/train_cnn.ipynb) and the lab-to-field check (ml/eval_cnn.py)
+
+1. Open `ml/train_cnn.ipynb` in Google Colab with a GPU runtime and choose *Runtime → Run all*. It loads PlantVillage's potato classes, rebuilds the split and asserts it is identical to `data/splits/*.csv`, trains MobileNetV2 in two phases, evaluates on the test set, exports TFLite, and downloads `cnn_outputs.zip`. The markdown cell at the top explains every step.
+2. Unzip: `cnn.tflite` and `labels.txt` into `models/`, and `cnn_metrics.json`, `confusion_matrix.png` and `training_curves.png` into `docs/`.
+3. Compare lab and field performance with the same model and preprocessing:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m ml.eval_cnn    # needs requirements-ml.txt; writes docs/cnn_domain_gap.md
+   ```
+
+- **Mendeley and TFDS.** Mendeley answers Python's HTTP client with 403 whatever the headers, while `curl` gets the file. So the notebook tries `tfds` first, then falls back to downloading the same archive with `curl` and reading it with the rule TFDS's `plant_village` builder uses (same files, labels and filenames).
+- **Matching the split.** TFDS records each image's original archive filename. `ml/prepare_images.py` numbered images in sorted filename order and dropped none, so the notebook maps them back to the split-CSV names exactly. `backend/tests/test_train_cnn_notebook.py` checks that the rebuild equals the committed CSVs.
+- **Model input:** float32 `[1, 224, 224, 3]`, RGB, bilinear antialiased resize, then `x / 127.5 - 1` (MobileNetV2's `preprocess_input`). Outputs are in `labels.txt` order: `early_blight`, `healthy`, `late_blight`.
 
 ## Continuous integration
 

@@ -1,0 +1,93 @@
+{
+  "created_at": "2026-10-12T11:48:41+00:00",
+  "data_source": "plant_village archive (same files as TFDS), via curl",
+  "classes": [
+    "early_blight",
+    "healthy",
+    "late_blight"
+  ],
+  "split_sizes": {
+    "train": 1506,
+    "val": 322,
+    "test": 324
+  },
+  "split_matches_repo_csvs": true,
+  "smoke_test": false,
+  "class_weights": {
+    "early_blight": 0.7171428571428572,
+    "healthy": 4.735849056603773,
+    "late_blight": 0.7171428571428572
+  },
+  "epochs_run": {
+    "phase1": 10,
+    "phase2": 6
+  },
+  "test": {
+    "accuracy": 0.9845679012345679,
+    "macro_f1": 0.9777327352521151,
+    "per_class": {
+      "early_blight": {
+        "precision": 0.9867549668874173,
+        "recall": 0.9933333333333333,
+        "f1-score": 0.9900332225913622,
+        "support": 150.0
+      },
+      "healthy": {
+        "precision": 0.9230769230769231,
+        "recall": 1.0,
+        "f1-score": 0.96,
+        "support": 24.0
+      },
+      "late_blight": {
+        "precision": 0.9931972789115646,
+        "recall": 0.9733333333333334,
+        "f1-score": 0.9831649831649831,
+        "support": 150.0
+      }
+    },
+    "confusion_matrix": {
+      "rows_true_cols_predicted": [
+        "early_blight",
+        "healthy",
+        "late_blight"
+      ],
+      "values": [
+        [
+          149,
+          0,
+          1
+        ],
+        [
+          0,
+          24,
+          0
+        ],
+        [
+          2,
+          2,
+          146
+        ]
+      ]
+    }
+  },
+  "tflite_check": {
+    "images": 50,
+    "agreement": 1.0,
+    "max_probability_difference": 0.059137940406799316,
+    "size_bytes": 2699112
+  },
+  "model_input": {
+    "shape": [
+      1,
+      224,
+      224,
+      3
+    ],
+    "dtype": "float32",
+    "preprocessing": "RGB, bilinear antialiased resize to 224x224, then mobilenet_v2.preprocess_input (x / 127.5 - 1)"
+  },
+  "versions": {
+    "tensorflow": "2.21.0",
+    "tfds": "4.9.10"
+  }
+}
