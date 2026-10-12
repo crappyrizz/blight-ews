@@ -173,19 +173,19 @@ blight, and it is recall after the fact, so treat it as approximate.
 | Report | `docs/data_report.md` (counts, imbalance, integrity checks) |
 | Caveat | Lab imagery on plain backgrounds; accuracy here is an upper bound on field performance |
 
-### 2.2 Open-Meteo archive (ERA5) — the weather history
+### 2.2 Open-Meteo archive (ERA5-Land) — the weather history
 
 | | |
 |---|---|
-| Source | `archive-api.open-meteo.com/v1/archive`, ERA5 reanalysis |
-| Licence / terms | Free for non-commercial use, no API key; ERA5 data originates from Copernicus/ECMWF |
-| Coverage | 1940 → today − 5 days (ERA5 publishes with a ~5-day lag) |
-| Resolution | ~25 km grid (9 km for the ECMWF IFS data from 2017), hourly |
+| Source | `archive-api.open-meteo.com/v1/archive` with `models=era5_land`: the ERA5-Land reanalysis. Pinned on purpose: the API's default (`best_match`) serves ECMWF IFS forecast data at this location from about 2017-18, identical to the historical-forecast API, and other data before that |
+| Licence / terms | Free for non-commercial use, no API key; ERA5-Land originates from Copernicus/ECMWF |
+| Coverage | 1950 → today − ~6 days (publication lag); stored here: 2015-01-01 onwards |
+| Resolution | 0.1° (~9 km) grid, hourly |
 | How obtained | `ml/fetch_weather.py --source archive` |
 | On disk | `weather_readings` table (`source='archive'`) plus raw CSV in `data/weather/` (gitignored) |
 | Units | °C, % relative humidity, timestamps UTC |
 | Quality report | `docs/data_quality.md`, `docs/missing_hours_per_month.png` |
-| Caveat | A 25 km cell smooths away the highland microclimate the node exists to measure; `ml/compare_sensor_vs_api.py` quantifies the difference |
+| Caveat | A 9 km cell still smooths away the plot's microclimate, which the node exists to measure. Hutton results depend on the product: over 2022-2026 ERA5-Land gives about twice as many Hutton days as the IFS forecast series (`docs/risk_eval.md`) |
 
 ### 2.3 Open-Meteo historical forecast — what was predicted at the time
 
