@@ -6,7 +6,7 @@ is normalised to one canonical form, +2547XXXXXXXX or +2541XXXXXXXX, no
 matter how it was typed.
 """
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -209,3 +209,23 @@ class LeafImageOut(BaseModel):
 class ImageUploadOut(BaseModel):
     image: LeafImageOut
     prediction: PredictionOut
+
+
+# --- symptom reports (farmer-reported onset of visible disease) ----------
+
+
+class SymptomReportIn(BaseModel):
+    node_id: str
+    onset_date: date  # local calendar day the farmer first saw symptoms
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+class SymptomReportOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    report_id: str
+    farmer_id: str
+    node_id: str
+    onset_date: date
+    notes: str | None
+    reported_at: datetime

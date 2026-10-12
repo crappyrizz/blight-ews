@@ -22,6 +22,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.config import settings
 from backend.models import RiskScore
 
 # --- Threshold rule ----------------------------------------------------
@@ -36,8 +37,9 @@ NEUTRAL_PRIOR = 0.5  # what we use when the weather is simply unknown
 FALLBACK_DAYS = 3  # how far back a usable day may be reused
 
 # --- Risk-level bands (shared with the dashboard wording) --------------
-MEDIUM_RISK_FROM = 0.34
-HIGH_RISK_FROM = 0.67
+# low < MEDIUM_RISK_FROM <= medium < HIGH_RISK_FROM <= high, set in config.
+MEDIUM_RISK_FROM = settings.RISK_MEDIUM_FROM
+HIGH_RISK_FROM = settings.RISK_HIGH_FROM
 
 # Where the risk number came from.
 BASIS_TODAY = "today"
@@ -83,18 +85,24 @@ def risk_level(score: float) -> str:
     return "low"
 
 
-def resolve_risk(session: Session, node_id: str, on_date: date) -> RiskContext:
+def resolve_risk(
+    session: Session, node_id: str, on_date: date, data_source: str = "sensor"
+) -> RiskContext:
     """Pick the risk number to fuse with, preferring today's own score.
 
     Order: today's usable score, else the most recent usable day within
     FALLBACK_DAYS, else the neutral prior. A day with status other than 'ok'
     has score NULL and is skipped here, never read as 0.0.
+
+    Only rows from `data_source` count: the risk job also writes API-based
+    rows for comparison, and those must never stand in for the plot's own.
     """
     usable = (
         select(RiskScore)
         .where(
             RiskScore.node_id == node_id,
             RiskScore.method == "hutton",
+            RiskScore.data_source == data_source,
             RiskScore.horizon_hours == 0,
             RiskScore.status == "ok",
             RiskScore.score.is_not(None),

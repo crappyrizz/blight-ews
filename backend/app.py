@@ -12,10 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend import auth, cnn_service, ids, ingest
+from backend import auth, cnn_service, dashboard, hutton, ids, ingest, risk_job
 from backend.config import REPO_ROOT, settings
 from backend.db import get_db
-from backend.models import Farmer, LeafImage, SensorNode, SensorReading
+from backend.models import Farmer, LeafImage, SensorNode, SensorReading, SymptomReport
 from backend.schemas import (
     MAX_BATCH_SIZE,
     FarmerLogin,
@@ -28,6 +28,8 @@ from backend.schemas import (
     ReadingBatch,
     ReadingOut,
     SensorNodeOut,
+    SymptomReportIn,
+    SymptomReportOut,
     TokenOut,
 )
 
@@ -46,7 +48,12 @@ async def lifespan(app: FastAPI):
     # Load the CNN once, not per request. If the model files are missing the
     # API still starts; only image upload answers 503.
     cnn_service.load_classifier()
+    # The hourly risk job runs in a background thread for as long as the API
+    # does (one API process only; scores are upserts, so a rerun is harmless).
+    scheduler = risk_job.start_scheduler()
     yield
+    if scheduler is not None:
+        scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="Blight Early-Warning System", lifespan=lifespan)
@@ -316,3 +323,70 @@ def get_image(
 ):
     """One of the farmer's leaf images (404 for anyone else's, as for nodes)."""
     return auth.get_owned_or_404(db, LeafImage, image_id, farmer)
+
+
+# --- dashboard, history and symptom reports (FR vii, viii) -------------
+
+
+@app.get("/nodes/{node_id}/dashboard")
+def node_dashboard(
+    node_id: str,
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+):
+    """Latest reading, last 24 h, today's Hutton status, the 24 h / 48 h forecast,
+    the current risk level and a one-sentence, decision-support summary."""
+    node = auth.get_owned_or_404(db, SensorNode, node_id, farmer)
+    return dashboard.build_dashboard(db, node)
+
+
+MAX_HISTORY_DAYS = 365
+
+
+@app.get("/nodes/{node_id}/history")
+def node_history(
+    node_id: str,
+    days: int = Query(30, ge=1, le=MAX_HISTORY_DAYS),
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+):
+    """Daily risk, diagnoses and alerts for the last `days` days, newest first (FR viii)."""
+    node = auth.get_owned_or_404(db, SensorNode, node_id, farmer)
+    return dashboard.build_history(db, node, days)
+
+
+@app.post("/symptom-reports", response_model=SymptomReportOut, status_code=status.HTTP_201_CREATED)
+def create_symptom_report(
+    payload: SymptomReportIn,
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+):
+    """The farmer reports the day he first saw symptoms. Used to judge the warnings."""
+    node = auth.get_owned_or_404(db, SensorNode, payload.node_id, farmer)
+    today = datetime.now(hutton.LOCAL_TZ).date()  # the farmer's calendar day
+    if payload.onset_date > today:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"onset_date cannot be in the future (today is {today})",
+        )
+    report = SymptomReport(farmer_id=farmer.farmer_id, node_id=node.node_id,
+                           onset_date=payload.onset_date, notes=payload.notes)
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return report
+
+
+@app.get("/symptom-reports", response_model=list[SymptomReportOut])
+def list_symptom_reports(
+    node_id: str | None = None,
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+):
+    """The farmer's own reports, newest onset first (optionally for one of his nodes)."""
+    query = select(SymptomReport).where(SymptomReport.farmer_id == farmer.farmer_id)
+    if node_id is not None:
+        auth.get_owned_or_404(db, SensorNode, node_id, farmer)
+        query = query.where(SymptomReport.node_id == node_id)
+    return db.scalars(query.order_by(SymptomReport.onset_date.desc(),
+                                     SymptomReport.reported_at.desc())).all()
