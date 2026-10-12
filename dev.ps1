@@ -39,6 +39,14 @@ if ($Command -eq "setup") {
         }
         if (-not (Test-Path $python)) { exit 1 }
     }
+    & $python -m pip --version *> $null
+    if ($LASTEXITCODE -ne 0) {
+        # Seen when the folder path is long: pip's own files pass Windows'
+        # 260-character limit while the venv is being created.
+        Write-Host "pip is missing from .venv. If this folder's path is long, clone to a shorter" -ForegroundColor Yellow
+        Write-Host "path or enable Windows long paths, then delete .venv and run setup again." -ForegroundColor Yellow
+        exit 1
+    }
     & $python -m pip install --upgrade pip
     & $python -m pip install -r requirements.txt
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
