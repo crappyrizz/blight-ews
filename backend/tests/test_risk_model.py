@@ -46,8 +46,7 @@ def seeded_archive(db_session, node, weather):
     db_session.flush()
 
 
-@pytest.fixture
-def tiny_models(tmp_path, monkeypatch, weather):
+def save_tiny_models(directory) -> dict:
     """Two small models with the real feature list, saved like ml/train_risk.py saves them."""
     dataset = bf.build_dataset(synthetic(days=400, start=START - timedelta(days=400), seed=3),
                                START - timedelta(days=400), START - timedelta(days=1))
@@ -56,9 +55,15 @@ def tiny_models(tmp_path, monkeypatch, weather):
         rows = bf.labelled(dataset, horizon)
         model = HistGradientBoostingClassifier(max_iter=20, random_state=0, early_stopping=False)
         model.fit(rows[bf.FEATURES], rows[bf.TARGETS[horizon]])
-        paths[horizon] = tmp_path / f"risk_model_{horizon}h.joblib"
+        paths[horizon] = directory / f"risk_model_{horizon}h.joblib"
         joblib.dump({"model": model, "features": list(bf.FEATURES),
                      "model_version": f"test-{horizon}h"}, paths[horizon])
+    return paths
+
+
+@pytest.fixture
+def tiny_models(tmp_path, monkeypatch):
+    paths = save_tiny_models(tmp_path)
     monkeypatch.setattr(risk_model, "MODEL_PATHS", paths)
     monkeypatch.setattr(risk_model, "_bundles", {})
     return paths
