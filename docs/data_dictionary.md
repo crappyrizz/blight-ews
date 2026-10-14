@@ -112,9 +112,11 @@ makes a replayed upload harmless.
 | threshold_used | double | 0–1 | τ(r) that resulted | `backend/fusion.py` |
 | risk_level | text | `low` \| `medium` \| `high` | Banded risk, for display | `backend/fusion.py` |
 | late_blight_flagged | bool | — | Whether late blight passed τ(r) and is raised to the farmer | `backend/fusion.py` |
+| risk_basis | text | `learned_24h` \| `hutton_today` \| `hutton_fallback` \| `neutral_prior` | Which weather risk r was used | `backend/fusion.py` |
+| risk_for_date | date NULL | local date | The day that risk describes (NULL for the neutral prior) | `backend/fusion.py` |
 | timestamp | timestamptz | UTC | When the diagnosis ran | database default |
 
-Storing `risk_score_used` and `threshold_used` on the row means any past
+Storing `risk_score_used`, `risk_basis` and `threshold_used` on the row means any past
 result can be reconstructed and explained, which is what makes the fusion
 step defensible rather than a black box.
 

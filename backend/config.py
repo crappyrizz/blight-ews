@@ -35,5 +35,20 @@ class Settings(BaseSettings):
     SITE_LON: float = 36.60
     TIMEZONE: str = "Africa/Nairobi"
 
+    # Risk-level bands for any 0-1 risk score (dashboard, fusion, history):
+    # low < RISK_MEDIUM_FROM <= medium < RISK_HIGH_FROM <= high.
+    RISK_MEDIUM_FROM: float = 0.33
+    RISK_HIGH_FROM: float = 0.66
+
+    # Fusion: tau(r) = clip(FUSION_TAU0 - FUSION_K * (r - 0.5), FUSION_TAU_MIN, FUSION_TAU_MAX)
+    FUSION_TAU0: float = 0.60
+    FUSION_K: float = 0.40
+    FUSION_TAU_MIN: float = 0.35
+    FUSION_TAU_MAX: float = 0.85
+
+    # The hourly risk-scoring job (backend/risk_job.py), started with the API.
+    RISK_JOB_ENABLED: bool = True
+    RISK_JOB_INTERVAL_MINUTES: int = 60
+
 
 settings = Settings()

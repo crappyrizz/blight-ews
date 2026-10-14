@@ -176,6 +176,10 @@ class DiagnosisResult(Base):
     __tablename__ = "diagnosis_results"
     __table_args__ = (
         CheckConstraint("risk_level IN ('low', 'medium', 'high')", name="ck_diagnosis_results_risk_level"),
+        CheckConstraint(
+            "risk_basis IN ('learned_24h', 'hutton_today', 'hutton_fallback', 'neutral_prior')",
+            name="ck_diagnosis_results_risk_basis",
+        ),
     )
 
     result_id: Mapped[str] = mapped_column(ID, primary_key=True, default=id_default(ids.DIAGNOSIS_RESULT))
@@ -188,6 +192,11 @@ class DiagnosisResult(Base):
     threshold_used: Mapped[float] = mapped_column(Float)  # tau(r) that resulted
     risk_level: Mapped[str] = mapped_column(String(10))
     late_blight_flagged: Mapped[bool] = mapped_column(Boolean)
+    # Which risk r was used (backend/fusion.py): 'learned_24h', 'hutton_today',
+    # 'hutton_fallback' or 'neutral_prior', and the day it describes (NULL
+    # for the neutral prior, which describes no day).
+    risk_basis: Mapped[str] = mapped_column(String(20))
+    risk_for_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
