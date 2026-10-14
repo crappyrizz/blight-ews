@@ -220,8 +220,11 @@ def test_dashboard_after_a_job_run(client, db_session, models):
     assert body["last_24h"]["valid_hours"] >= 23
     assert body["last_24h"]["min_temperature"] <= body["last_24h"]["max_temperature"]
     assert body["hutton_today"]["for_date"] == str(TODAY)
-    assert body["forecast"]["p24"]["issued_from"] == str(TODAY - timedelta(days=1))
-    assert body["forecast"]["p48"]["covers"] == [str(TODAY), str(TODAY + timedelta(days=1))]
+    # The newest judged forecast: from yesterday, or from today once today has
+    # 20 hours of readings (late in the local day). Either way it covers the next days.
+    issued = date.fromisoformat(body["forecast"]["p24"]["issued_from"])
+    assert issued in (TODAY - timedelta(days=1), TODAY)
+    assert body["forecast"]["p48"]["covers"] == [str(issued + timedelta(days=1)), str(issued + timedelta(days=2))]
     assert 0 <= body["forecast"]["p24"]["probability"] <= 1
     assert body["risk"]["risk_level"] == fusion.risk_level(body["risk"]["score"])
     assert body["summary"]
