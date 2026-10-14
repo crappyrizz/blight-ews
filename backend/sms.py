@@ -22,9 +22,22 @@ A thin wrapper around the official africastalking Python SDK (2.0.x):
 
 SMS_DRY_RUN (config, on by default) logs the message instead of sending, so
 development and the tests never send a real SMS by accident.
+
+A DIRECT FALLBACK. On the development PC the SDK could not connect to the
+sandbox at all: the SDK sends through requests/urllib3, and urllib3's TLS
+handshake with an explicit CA bundle failed every time (SSL
+WRONG_VERSION_NUMBER), while httpx, curl and plain Python reached the same
+server without trouble. So if, and only if, the SDK fails BEFORE anything
+reached Africa's Talking (TLS handshake or connect failure), the identical
+request is sent with httpx: the same URL, form fields and apiKey header the
+SDK uses (africastalking/SMS.py and Service.py). A timeout while waiting for
+the reply is NOT retried, because the message may already have gone, and the
+farmer must never get it twice.
 """
 import logging
 from dataclasses import dataclass
+
+import httpx
 
 from backend.config import settings
 
@@ -48,6 +61,28 @@ class SendResult:
 
 _service = None
 
+SANDBOX_URL = "https://api.sandbox.africastalking.com/version1/messaging"
+LIVE_URL = "https://api.africastalking.com/version1/messaging"
+
+
+def _not_sent_yet(error: Exception) -> bool:
+    """True if the SDK failed before the request could reach Africa's Talking."""
+    import requests
+
+    return isinstance(error, requests.exceptions.SSLError | requests.exceptions.ConnectTimeout)
+
+
+def _send_direct(phone_number: str, message: str) -> dict:
+    """The SDK's own request (SMS.send), made with httpx instead of requests."""
+    data = {"username": settings.AT_USERNAME, "to": phone_number, "message": message, "bulkSMSMode": 1}
+    if settings.AT_SENDER_ID:
+        data["from"] = settings.AT_SENDER_ID
+    url = SANDBOX_URL if settings.AT_USERNAME == "sandbox" else LIVE_URL
+    response = httpx.post(url, data=data, timeout=30,
+                          headers={"Accept": "application/json", "apiKey": settings.AT_API_KEY})
+    response.raise_for_status()
+    return response.json()
+
 
 def _sms_service():
     """The SDK's SMS service, initialised once with the keys from .env."""
@@ -69,8 +104,15 @@ def send(phone_number: str, message: str) -> SendResult:
     try:
         response = _sms_service().send(message, [phone_number], sender_id=settings.AT_SENDER_ID or None)
     except Exception as error:  # network, bad key, SDK validation: report, don't crash the caller
-        log.error("SMS to %s failed: %s", phone_number, error)
-        return SendResult(None, STATUS_ERROR, f"{type(error).__name__}: {error}"[:200])
+        if not _not_sent_yet(error):
+            log.error("SMS to %s failed: %s", phone_number, error)
+            return SendResult(None, STATUS_ERROR, f"{type(error).__name__}: {error}"[:200])
+        log.warning("SDK could not connect (%s); sending the same request directly", type(error).__name__)
+        try:
+            response = _send_direct(phone_number, message)
+        except Exception as direct_error:
+            log.error("SMS to %s failed on the direct path too: %s", phone_number, direct_error)
+            return SendResult(None, STATUS_ERROR, f"{type(direct_error).__name__}: {direct_error}"[:200])
 
     data = response.get("SMSMessageData", {}) if isinstance(response, dict) else {}
     recipients = data.get("Recipients") or []

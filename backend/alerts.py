@@ -133,8 +133,11 @@ def send_and_record(session: Session, node: SensorNode, alert_type: str, message
 
 
 def _last_alert_at(session: Session, node_id: str, alert_type: str) -> datetime | None:
+    """When the last such SMS actually left (an attempt that never reached
+    Africa's Talking, status 'error', does not count: the farmer got nothing)."""
     return session.scalar(
-        select(Alert.sent_at).where(Alert.node_id == node_id, Alert.alert_type == alert_type)
+        select(Alert.sent_at).where(Alert.node_id == node_id, Alert.alert_type == alert_type,
+                                    Alert.delivery_status != sms.STATUS_ERROR)
         .order_by(Alert.sent_at.desc()).limit(1)
     )
 
@@ -155,16 +158,23 @@ def check_high_risk(session: Session, node: SensorNode, today: date,
         session.flush()
         return None
     farmer = _farmer(session, node)
-    return send_and_record(session, node, ALERT_HIGH_RISK,
-                           high_risk_message(plot_name(node.location, farmer.farm_id)),
-                           risk_score_id=risk.score_id)
+    alert = send_and_record(session, node, ALERT_HIGH_RISK,
+                            high_risk_message(plot_name(node.location, farmer.farm_id)),
+                            risk_score_id=risk.score_id)
+    if alert.delivery_status == sms.STATUS_ERROR:
+        # Never reached Africa's Talking: keep the old level, so the next
+        # hourly run sees the change again and retries. The row stays as a record.
+        node.last_risk_level = previous
+        session.flush()
+    return alert
 
 
 def send_diagnosis_alert(session: Session, node: SensorNode, diagnosis: DiagnosisResult) -> Alert | None:
     """A diagnosis SMS when late blight was flagged; never twice for the same diagnosis."""
     if not diagnosis.late_blight_flagged:
         return None
-    already = session.scalar(select(Alert).where(Alert.result_id == diagnosis.result_id))
+    already = session.scalar(select(Alert).where(Alert.result_id == diagnosis.result_id,
+                                                 Alert.delivery_status != sms.STATUS_ERROR))
     if already is not None:
         return None
     message = diagnosis_message(diagnosis.disease_label, diagnosis.confidence, diagnosis.risk_level)

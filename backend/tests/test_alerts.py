@@ -352,3 +352,83 @@ def test_delivery_report_token_is_checked_when_configured(client, monkeypatch):
 
 def test_tests_never_send_by_default():
     assert settings.SMS_DRY_RUN is True or settings.AT_USERNAME == "sandbox"
+
+
+# --- a send that never reached Africa's Talking -------------------------------------------
+
+
+def test_a_failed_send_is_retried_next_run_and_starts_no_cooldown(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "SMS_DRY_RUN", False)
+    monkeypatch.setattr(sms, "_service", FakeATSMS(fail=ConnectionError("TLS failed")))
+    node = make_node(db_session)
+    node.last_risk_level = "medium"
+    set_risk(db_session, node, 1.0)
+
+    failed = alerts.check_high_risk(db_session, node, TODAY, NOW)
+
+    assert failed.delivery_status == sms.STATUS_ERROR
+    assert node.last_risk_level == "medium"  # not advanced: the farmer was not told
+
+    working = FakeATSMS()
+    monkeypatch.setattr(sms, "_service", working)
+    retried = alerts.check_high_risk(db_session, node, TODAY, NOW + timedelta(hours=1))
+
+    assert retried is not None and retried.delivery_status == sms.STATUS_SUBMITTED
+    assert node.last_risk_level == "high"
+    assert len(alerts_of(db_session, node, "high_risk")) == 2  # both attempts are on record
+
+
+# --- the direct fallback when the SDK cannot connect -----------------------------------------
+
+
+def test_sdk_tls_failure_falls_back_to_the_identical_direct_request(monkeypatch):
+    import requests
+
+    monkeypatch.setattr(settings, "SMS_DRY_RUN", False)
+    monkeypatch.setattr(sms, "_service", FakeATSMS(fail=requests.exceptions.SSLError("WRONG_VERSION_NUMBER")))
+    sent = []
+
+    def fake_direct(phone, message):
+        sent.append((phone, message))
+        return FakeATSMS().send(message, [phone])
+
+    monkeypatch.setattr(sms, "_send_direct", fake_direct)
+    result = sms.send("+254722000111", "hello")
+
+    assert sent == [("+254722000111", "hello")]
+    assert result.status == sms.STATUS_SUBMITTED and result.message_id == "ATXid_test1"
+
+
+@pytest.mark.parametrize("error_name", ["ReadTimeout", "ConnectionError"])
+def test_no_fallback_when_the_message_may_already_have_gone(monkeypatch, error_name):
+    import requests
+
+    monkeypatch.setattr(settings, "SMS_DRY_RUN", False)
+    monkeypatch.setattr(sms, "_service", FakeATSMS(fail=getattr(requests.exceptions, error_name)("x")))
+    monkeypatch.setattr(sms, "_send_direct", lambda *a: pytest.fail("must not resend"))
+    assert sms.send("+254722000111", "hello").status == sms.STATUS_ERROR
+
+
+def test_direct_request_matches_the_sdk(monkeypatch):
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"SMSMessageData": {"Recipients": []}}
+
+    def fake_post(url, data, timeout, headers):
+        captured.update(url=url, data=data, headers=headers)
+        return Response()
+
+    monkeypatch.setattr(sms.httpx, "post", fake_post)
+    monkeypatch.setattr(settings, "AT_USERNAME", "sandbox")
+    monkeypatch.setattr(settings, "AT_API_KEY", "k")
+    monkeypatch.setattr(settings, "AT_SENDER_ID", "")
+    sms._send_direct("+254722000111", "hello")
+
+    assert captured["url"] == "https://api.sandbox.africastalking.com/version1/messaging"
+    assert captured["data"] == {"username": "sandbox", "to": "+254722000111", "message": "hello", "bulkSMSMode": 1}
+    assert captured["headers"] == {"Accept": "application/json", "apiKey": "k"}
