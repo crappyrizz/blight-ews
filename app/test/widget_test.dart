@@ -55,6 +55,14 @@ void main() {
       expect(riskLabel(d.level), 'RISK UNKNOWN');
     });
 
+    test('a forecast for days already past is not current', () {
+      final d = Dashboard.fromJson(realDashboard);
+      expect(d.outlook24!.isCurrent(DateTime(2026, 10, 12)), isTrue); // covers 12 Oct
+      expect(d.outlook24!.isCurrent(DateTime(2026, 10, 15)), isFalse); // three days later
+      expect(d.outlook48!.isCurrent(DateTime(2026, 10, 13)), isTrue); // covers 12-13 Oct
+      expect(shortDate(d.outlook24!.issuedFrom!), '11 Oct');
+    });
+
     test('a judged Hutton period is explained in words', () {
       final h = HuttonToday.fromJson({'status': 'ok', 'label': 'High risk', 'hutton_day': true, 'hutton_period': true});
       expect(h.explanation, 'Blight weather two days running (Hutton period)');

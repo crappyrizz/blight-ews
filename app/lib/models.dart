@@ -99,18 +99,38 @@ class HuttonToday {
 }
 
 class Outlook {
-  Outlook({required this.probability, required this.level});
+  Outlook({required this.probability, required this.level, required this.issuedFrom, required this.covers});
 
   final double probability;
   final RiskLevel level;
+  final DateTime? issuedFrom; // the day whose readings made the forecast
+  final List<DateTime> covers; // the days it is about
 
   static Outlook? fromJson(dynamic j) => j is Map<String, dynamic>
       ? Outlook(
           probability: (j['probability'] as num).toDouble(),
           level: parseRiskLevel(j['risk_level'] as String?),
+          issuedFrom: DateTime.tryParse((j['issued_from'] ?? '').toString()),
+          covers: ((j['covers'] as List?) ?? const [])
+              .map((d) => DateTime.tryParse(d.toString()))
+              .whereType<DateTime>()
+              .toList(),
         )
       : null;
+
+  /// Still about today or later? A forecast for days already past must not
+  /// be shown as "next 24 hours" (e.g. when the sensor has gone quiet).
+  bool isCurrent(DateTime today) {
+    if (covers.isEmpty) return false;
+    final day = DateTime(today.year, today.month, today.day);
+    return !covers.last.isBefore(day);
+  }
 }
+
+const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/// "11 Oct".
+String shortDate(DateTime d) => '${d.day} ${_months[d.month - 1]}';
 
 class Dashboard {
   Dashboard({

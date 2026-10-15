@@ -307,7 +307,11 @@ class _OutlookTile extends StatelessWidget {
             const SizedBox(height: 6),
             if (outlook == null)
               Text('Not available yet', style: text.titleMedium)
-            else ...[
+            else if (!outlook!.isCurrent(DateTime.now())) ...[
+              Text('No recent forecast', style: text.titleMedium),
+              if (outlook!.issuedFrom != null)
+                Text('The last one was made on ${shortDate(outlook!.issuedFrom!)}.', style: text.bodySmall),
+            ] else ...[
               Row(children: [
                 Icon(riskIcon(level), color: riskColor(level)),
                 const SizedBox(width: 6),
