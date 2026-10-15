@@ -30,6 +30,12 @@ PyJWT==2.15.1
 python-multipart==0.0.32
 ai-edge-litert==2.3.0
 
+# Hourly risk-scoring job, started with the API (backend/risk_job.py)
+apscheduler==3.11.3
+
+# SMS alerts (backend/sms.py): the official Africa's Talking SDK
+africastalking==2.0.3
+
 # HTTP client: Open-Meteo fetching (ml/fetch_weather.py) and the test client
 httpx==0.28.1
 

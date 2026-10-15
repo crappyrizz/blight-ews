@@ -6,7 +6,7 @@ is normalised to one canonical form, +2547XXXXXXXX or +2541XXXXXXXX, no
 matter how it was typed.
 """
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -206,6 +206,60 @@ class LeafImageOut(BaseModel):
         return value.astimezone(UTC)
 
 
+class DiagnosisOut(BaseModel):
+    """The fused result (backend/fusion.py): the CNN's call, gated by the weather risk."""
+
+    result_id: str
+    label: str  # the CNN's most probable class, unchanged by fusion
+    confidence: float
+    risk_score_used: float  # r
+    risk_basis: str  # learned_24h | hutton_today | hutton_fallback | neutral_prior
+    risk_for_date: date | None
+    risk_note: str
+    threshold_used: float  # tau(r)
+    late_blight_flagged: bool  # p_late >= tau(r)
+    risk_level: str
+    summary: str  # one decision-support sentence
+    contributing_readings: int  # sensor readings in the 48 h before the photo
+    sms_alert: str | None = None  # delivery_status of the diagnosis SMS, if one was sent
+
+
 class ImageUploadOut(BaseModel):
     image: LeafImageOut
-    prediction: PredictionOut
+    prediction: PredictionOut  # the raw CNN output
+    diagnosis: DiagnosisOut  # after fusion with the weather risk
+
+
+# --- symptom reports (farmer-reported onset of visible disease) ----------
+
+
+class SymptomReportIn(BaseModel):
+    node_id: str
+    onset_date: date  # local calendar day the farmer first saw symptoms
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+class SymptomReportOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    report_id: str
+    farmer_id: str
+    node_id: str
+    onset_date: date
+    notes: str | None
+    reported_at: datetime
+
+
+# --- SMS alerts -----------------------------------------------------------
+
+
+class AlertOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    alert_id: str
+    node_id: str
+    alert_type: str
+    message: str
+    sent_at: datetime
+    delivery_status: str
+    provider_message_id: str | None

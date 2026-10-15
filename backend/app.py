@@ -4,6 +4,7 @@ Run locally from the repo root:
     .\\.venv\\Scripts\\python.exe -m uvicorn backend.app:app --reload
 Interactive docs: http://127.0.0.1:8000/docs
 """
+import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
@@ -12,12 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend import auth, cnn_service, ids, ingest
+from backend import alerts, auth, cnn_service, dashboard, fusion, hutton, ids, ingest, risk_job
 from backend.config import REPO_ROOT, settings
 from backend.db import get_db
-from backend.models import Farmer, LeafImage, SensorNode, SensorReading
+from backend.models import Farmer, LeafImage, SensorNode, SensorReading, SymptomReport
 from backend.schemas import (
     MAX_BATCH_SIZE,
+    AlertOut,
+    DiagnosisOut,
     FarmerLogin,
     FarmerOut,
     FarmerRegister,
@@ -28,6 +31,8 @@ from backend.schemas import (
     ReadingBatch,
     ReadingOut,
     SensorNodeOut,
+    SymptomReportIn,
+    SymptomReportOut,
     TokenOut,
 )
 
@@ -46,7 +51,12 @@ async def lifespan(app: FastAPI):
     # Load the CNN once, not per request. If the model files are missing the
     # API still starts; only image upload answers 503.
     cnn_service.load_classifier()
+    # The hourly risk job runs in a background thread for as long as the API
+    # does (one API process only; scores are upserts, so a rerun is harmless).
+    scheduler = risk_job.start_scheduler()
     yield
+    if scheduler is not None:
+        scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="Blight Early-Warning System", lifespan=lifespan)
@@ -232,11 +242,14 @@ def upload_image(
     capture_date: datetime | None = Form(
         None, description="When the photo was taken, with timezone; default: now"
     ),
+    node_id: str | None = Form(
+        None, description="The sensor node at this plot; default: the farmer's only node"
+    ),
     farmer: Farmer = Depends(auth.get_current_farmer),
     db: Session = Depends(get_db),
     classifier: cnn_service.CNNClassifier = Depends(cnn_service.get_classifier),
 ):
-    """Upload a leaf photo, store it, and return the CNN's raw prediction.
+    """Upload a leaf photo: store it, run the CNN, fuse with the weather risk.
 
     A photo the model cannot judge fairly (unreadable, too small, too dark,
     too blurry) gets 422 with a reason code and a message the app can show,
@@ -247,6 +260,8 @@ def upload_image(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="capture_date needs a timezone, e.g. 2026-10-12T09:30:00+03:00",
         )
+
+    node = _node_for_photo(db, farmer, node_id)
 
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
@@ -280,23 +295,29 @@ def upload_image(
         file_path=_stored_path(path),
         capture_date=capture_date or datetime.now(UTC),
     )
-    db.add(leaf_image)
     try:
+        db.add(leaf_image)
+        db.flush()
+        # Fusion (backend/fusion.py): the weather risk r for the photo's own
+        # day moves the late-blight threshold tau(r); the diagnosis row and
+        # its 48 h of contributing sensor readings are written with the image.
+        diagnosis, fused, contributions = fusion.diagnose(
+            db, image_id, node.node_id if node else None, leaf_image.capture_date,
+            prediction.probabilities,
+        )
         db.commit()
     except SQLAlchemyError:
         db.rollback()
-        path.unlink(missing_ok=True)  # no row, so no orphan file either
+        path.unlink(missing_ok=True)  # no rows, so no orphan file either
         raise
     db.refresh(leaf_image)
 
-    # ===================== FUSION HOOK (later prompt) =====================
-    # This is where the weather-based risk score r is combined with the CNN:
-    # fusion.resolve_risk() picks today's risk for the farmer's node,
-    # tau(r) shifts the late-blight threshold, and a diagnosis_results row is
-    # written (label, confidence, probabilities, risk_score_used,
-    # threshold_used, risk_level, late_blight_flagged). Until then the raw
-    # prediction below is returned as-is and no diagnosis row is stored.
-    # ======================================================================
+    # SMS after the diagnosis is safely stored: a failed send can never lose it.
+    sms_alert = None
+    if node is not None:
+        alert = alerts.send_diagnosis_alert(db, node, diagnosis)
+        db.commit()
+        sms_alert = None if alert is None else alert.delivery_status
 
     return ImageUploadOut(
         image=LeafImageOut.model_validate(leaf_image),
@@ -305,7 +326,40 @@ def upload_image(
             confidence=prediction.confidence,
             probabilities=prediction.probabilities,
         ),
+        diagnosis=DiagnosisOut(
+            result_id=diagnosis.result_id,
+            label=fused.label,
+            confidence=fused.confidence,
+            risk_score_used=fused.risk_score_used,
+            risk_basis=fused.risk_basis,
+            risk_for_date=fused.risk_for_date,
+            risk_note=fused.note,
+            threshold_used=fused.threshold_used,
+            late_blight_flagged=fused.late_blight_flagged,
+            risk_level=fused.risk_level,
+            summary=fused.summary,
+            contributing_readings=contributions,
+            sms_alert=sms_alert,
+        ),
     )
+
+
+def _node_for_photo(db: Session, farmer: Farmer, node_id: str | None) -> SensorNode | None:
+    """The node whose weather applies to this photo.
+
+    Given: it must be the farmer's (404 otherwise). Not given: the farmer's
+    only node; with several the app must say which (422); with none, fusion
+    falls back to the neutral prior and says so.
+    """
+    if node_id is not None:
+        return auth.get_owned_or_404(db, SensorNode, node_id, farmer)
+    nodes = db.scalars(select(SensorNode).where(SensorNode.farmer_id == farmer.farmer_id)).all()
+    if len(nodes) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="You have several sensor nodes; send node_id to say which plot the photo is from.",
+        )
+    return nodes[0] if nodes else None
 
 
 @app.get("/images/{image_id}", response_model=LeafImageOut)
@@ -316,3 +370,121 @@ def get_image(
 ):
     """One of the farmer's leaf images (404 for anyone else's, as for nodes)."""
     return auth.get_owned_or_404(db, LeafImage, image_id, farmer)
+
+
+# --- dashboard, history and symptom reports (FR vii, viii) -------------
+
+
+@app.get("/nodes/{node_id}/dashboard")
+def node_dashboard(
+    node_id: str,
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+):
+    """Latest reading, last 24 h, today's Hutton status, the 24 h / 48 h forecast,
+    the current risk level and a one-sentence, decision-support summary."""
+    node = auth.get_owned_or_404(db, SensorNode, node_id, farmer)
+    return dashboard.build_dashboard(db, node)
+
+
+MAX_HISTORY_DAYS = 365
+
+
+@app.get("/nodes/{node_id}/history")
+def node_history(
+    node_id: str,
+    days: int = Query(30, ge=1, le=MAX_HISTORY_DAYS),
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+):
+    """Daily risk, diagnoses and alerts for the last `days` days, newest first (FR viii)."""
+    node = auth.get_owned_or_404(db, SensorNode, node_id, farmer)
+    return dashboard.build_history(db, node, days)
+
+
+@app.post("/symptom-reports", response_model=SymptomReportOut, status_code=status.HTTP_201_CREATED)
+def create_symptom_report(
+    payload: SymptomReportIn,
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+):
+    """The farmer reports the day he first saw symptoms. Used to judge the warnings."""
+    node = auth.get_owned_or_404(db, SensorNode, payload.node_id, farmer)
+    today = datetime.now(hutton.LOCAL_TZ).date()  # the farmer's calendar day
+    if payload.onset_date > today:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"onset_date cannot be in the future (today is {today})",
+        )
+    report = SymptomReport(farmer_id=farmer.farmer_id, node_id=node.node_id,
+                           onset_date=payload.onset_date, notes=payload.notes)
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return report
+
+
+@app.get("/symptom-reports", response_model=list[SymptomReportOut])
+def list_symptom_reports(
+    node_id: str | None = None,
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+):
+    """The farmer's own reports, newest onset first (optionally for one of his nodes)."""
+    query = select(SymptomReport).where(SymptomReport.farmer_id == farmer.farmer_id)
+    if node_id is not None:
+        auth.get_owned_or_404(db, SensorNode, node_id, farmer)
+        query = query.where(SymptomReport.node_id == node_id)
+    return db.scalars(query.order_by(SymptomReport.onset_date.desc(),
+                                     SymptomReport.reported_at.desc())).all()
+
+
+# --- SMS: status on demand, and Africa's Talking delivery reports (FR vii) ----
+
+
+@app.post("/nodes/{node_id}/status-sms", response_model=AlertOut, status_code=status.HTTP_201_CREATED)
+def status_sms(
+    node_id: str,
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+):
+    """Text the farmer the plot's status: only when the risk is judged and low.
+
+    409 (with a reason) when the risk is unknown, not low, or a status SMS
+    went out in the last hour; the app shows the dashboard instead.
+    """
+    node = auth.get_owned_or_404(db, SensorNode, node_id, farmer)
+    try:
+        alert = alerts.send_status(db, node, datetime.now(hutton.LOCAL_TZ).date())
+    except alerts.StatusRefused as refused:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"reason": refused.reason, "message": refused.message},
+        ) from None
+    db.commit()
+    db.refresh(alert)
+    return alert
+
+
+@app.post("/sms/delivery-report")
+def sms_delivery_report(
+    id: str = Form(..., description="Africa's Talking message id (ATXid_...)"),
+    status_: str = Form(..., alias="status"),
+    failureReason: str | None = Form(None),  # Africa's Talking's own field name
+    token: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Africa's Talking's delivery-report callback (form-encoded POST).
+
+    Fields used: id, status (e.g. Success, Failed, Rejected, Buffered, Sent),
+    failureReason (only on Failed/Rejected); phoneNumber, networkCode and
+    retryCount are also sent and ignored. An unknown id still answers 200, so
+    Africa's Talking does not keep retrying a message we did not send.
+    """
+    if settings.SMS_CALLBACK_TOKEN and not secrets.compare_digest(
+        token or "", settings.SMS_CALLBACK_TOKEN
+    ):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="bad token")
+    alert = alerts.apply_delivery_report(db, id, status_, failureReason)
+    db.commit()
+    return {"updated": alert is not None}
