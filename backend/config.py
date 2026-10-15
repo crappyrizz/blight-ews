@@ -29,11 +29,31 @@ class Settings(BaseSettings):
     AT_USERNAME: str
     AT_API_KEY: str
     AT_SENDER_ID: str = ""  # optional: empty means Africa's Talking's default sender
+    # On (the default): SMS are logged, not sent. Set SMS_DRY_RUN=false in .env to send.
+    SMS_DRY_RUN: bool = True
+    # Optional shared secret for the delivery-report callback URL
+    # (.../sms/delivery-report?token=...). Empty: no token required.
+    SMS_CALLBACK_TOKEN: str = ""
 
     # Farm site and local timezone
     SITE_LAT: float = -0.70
     SITE_LON: float = 36.60
     TIMEZONE: str = "Africa/Nairobi"
+
+    # Risk-level bands for any 0-1 risk score (dashboard, fusion, history):
+    # low < RISK_MEDIUM_FROM <= medium < RISK_HIGH_FROM <= high.
+    RISK_MEDIUM_FROM: float = 0.33
+    RISK_HIGH_FROM: float = 0.66
+
+    # Fusion: tau(r) = clip(FUSION_TAU0 - FUSION_K * (r - 0.5), FUSION_TAU_MIN, FUSION_TAU_MAX)
+    FUSION_TAU0: float = 0.60
+    FUSION_K: float = 0.40
+    FUSION_TAU_MIN: float = 0.35
+    FUSION_TAU_MAX: float = 0.85
+
+    # The hourly risk-scoring job (backend/risk_job.py), started with the API.
+    RISK_JOB_ENABLED: bool = True
+    RISK_JOB_INTERVAL_MINUTES: int = 60
 
 
 settings = Settings()

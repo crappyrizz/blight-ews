@@ -352,3 +352,78 @@ def test_command_line_without_a_model_says_where_to_put_it(tmp_path, monkeypatch
     assert cnn_service.main(["x.jpg", "--model", str(tmp_path / "cnn.tflite"),
                              "--labels", str(tmp_path / "labels.txt")]) == 1
     assert "Model not found" in capsys.readouterr().out
+
+
+# --- fusion through POST /images ------------------------------------------------------
+
+
+def farmer_id_for(client, headers):
+    return client.get("/me", headers=headers).json()["farmer_id"]
+
+
+def add_node(db_session, farmer_id):
+    from backend.models import SensorNode
+
+    node = SensorNode(farmer_id=farmer_id, location="plot", latitude=-0.7, longitude=36.6)
+    db_session.add(node)
+    db_session.flush()
+    return node
+
+
+def test_upload_returns_and_stores_the_fused_diagnosis(client, db_session, fake_model):
+    from datetime import date, datetime, timedelta
+
+    from backend.hutton import LOCAL_TZ
+    from backend.models import DiagnosisResult, ReadingContribution, RiskScore, SensorReading
+
+    headers = token_for(client)
+    node = add_node(db_session, farmer_id_for(client, headers))
+    taken = datetime(2026, 3, 10, 9, 0, tzinfo=LOCAL_TZ)
+    for hours in (1, 5, 30, 60):  # the last one is outside the 48 h window
+        db_session.add(SensorReading(node_id=node.node_id, timestamp=taken - timedelta(hours=hours),
+                                     temperature=12.0, humidity=95.0))
+    db_session.add(RiskScore(node_id=node.node_id, method="learned", data_source="sensor",
+                             horizon_hours=24, status="ok", score=0.9, valid_hours=24,
+                             for_date=date(2026, 3, 9)))
+    db_session.flush()
+
+    response = upload(client, headers, leaf_like_bytes(), capture_date=taken.isoformat())
+
+    assert response.status_code == 201
+    d = response.json()["diagnosis"]
+    assert d["label"] == "late_blight" and d["confidence"] == pytest.approx(0.8)
+    assert d["risk_score_used"] == pytest.approx(0.9)
+    assert d["risk_basis"] == "learned_24h"
+    assert d["threshold_used"] == pytest.approx(0.44)
+    assert d["late_blight_flagged"] is True
+    assert d["risk_level"] == "high"
+    assert d["contributing_readings"] == 3
+    assert d["summary"] and "spray" not in d["summary"].lower()
+
+    stored = db_session.get(DiagnosisResult, d["result_id"])
+    assert stored.image_id == response.json()["image"]["image_id"]
+    assert db_session.query(ReadingContribution).filter_by(result_id=d["result_id"]).count() == 3
+
+
+def test_upload_without_a_node_uses_the_neutral_prior(client, fake_model):
+    d = upload(client, token_for(client), leaf_like_bytes()).json()["diagnosis"]
+    assert d["risk_basis"] == "neutral_prior"
+    assert d["threshold_used"] == pytest.approx(0.60)
+    assert d["late_blight_flagged"] is True  # p_late 0.80 >= 0.60
+
+
+def test_several_nodes_need_a_node_id(client, db_session, fake_model):
+    headers = token_for(client)
+    farmer_id = farmer_id_for(client, headers)
+    first = add_node(db_session, farmer_id)
+    add_node(db_session, farmer_id)
+
+    assert upload(client, headers, leaf_like_bytes()).status_code == 422
+    assert upload(client, headers, leaf_like_bytes(), node_id=first.node_id).status_code == 201
+
+
+def test_another_farmers_node_is_404(client, db_session, fake_model):
+    owner = token_for(client)
+    node = add_node(db_session, farmer_id_for(client, owner))
+    stranger = token_for(client, OTHER_PHONE)
+    assert upload(client, stranger, leaf_like_bytes(), node_id=node.node_id).status_code == 404
