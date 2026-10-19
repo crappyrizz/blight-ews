@@ -205,6 +205,26 @@ Notes on the image export:
 - **Matching the split.** TFDS records each image's original archive filename. `ml/prepare_images.py` numbered images in sorted filename order and dropped none, so the notebook maps them back to the split-CSV names exactly. `backend/tests/test_train_cnn_notebook.py` checks that the rebuild equals the committed CSVs.
 - **Model input:** float32 `[1, 224, 224, 3]`, RGB, bilinear antialiased resize, then `x / 127.5 - 1` (MobileNetV2's `preprocess_input`). Outputs are in `labels.txt` order: `early_blight`, `healthy`, `late_blight`.
 
+## Mobile app (app/, Flutter, Android)
+
+Flat layout: `lib/main.dart` (theme, start screen), `lib/api.dart` (every backend call, the login token in `flutter_secure_storage`, and errors turned into plain sentences), `lib/models.dart`, `lib/widgets.dart`, and one file per screen (`login_screen.dart`, `register_screen.dart`, `dashboard_screen.dart`).
+
+- **Server address:** the single constant `apiBaseUrl` in `lib/api.dart` (default: the PC's Wi-Fi address). Override it without editing: `flutter run --dart-define=API_BASE_URL=http://<PC-IP>:8000`. From the Android emulator, the PC is `http://10.0.2.2:8000`.
+- **Plain HTTP is allowed for development only** (`android/app/src/main/res/xml/network_security_config.xml`). Remove it for production and serve the API over HTTPS.
+- Flutter SDK at `C:\srclutter` (on the user PATH); Android Studio's JDK (`flutter config --jdk-dir`).
+
+```powershell
+# 1. Backend reachable from the phone (same Wi-Fi as the PC):
+.\.venv\Scripts\python.exe -m uvicorn backend.app:app --host 0.0.0.0 --port 8000
+
+# 2. Once, in an ADMIN PowerShell: allow port 8000 on private networks only
+New-NetFirewallRule -DisplayName "Blight EWS API (dev)" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private
+
+# 3. Run the app (phone with USB debugging, or a started emulator)
+cd app
+flutter run
+```
+
 ## Continuous integration
 
 [.github/workflows/tests.yml](.github/workflows/tests.yml) runs on every push to `main` and every pull request, as two jobs:

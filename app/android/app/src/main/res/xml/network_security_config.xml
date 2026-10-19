@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEVELOPMENT ONLY: allows plain HTTP, so the phone can reach the backend
+  running on the developer's PC over the local network
+  (http://<PC LAN IP>:8000, see lib/api.dart).
+
+  REMOVE THIS FOR PRODUCTION: serve the API over HTTPS, set
+  cleartextTrafficPermitted="false" (or delete this file and the
+  android:networkSecurityConfig attribute in AndroidManifest.xml).
+  Over plain HTTP, the farmer's password and login token could be read by
+  anyone on the same network.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
