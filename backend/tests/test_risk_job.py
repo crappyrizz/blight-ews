@@ -290,7 +290,8 @@ def test_history_lists_diagnoses_and_alerts_newest_first(client, db_session):
         db_session.add(DiagnosisResult(
             image_id=image.image_id, disease_label="late_blight", confidence=0.9,
             probabilities={"late_blight": 0.9}, risk_score_used=0.5, threshold_used=0.6,
-            risk_level="medium", late_blight_flagged=True, timestamp=NOW - timedelta(days=days_ago)))
+            risk_level="medium", late_blight_flagged=True, risk_basis="neutral_prior",
+            timestamp=NOW - timedelta(days=days_ago)))
         db_session.add(Alert(node_id=node.node_id, alert_type="high_risk", message=f"m{days_ago}",
                              delivery_status="sent", sent_at=NOW - timedelta(days=days_ago)))
     db_session.flush()

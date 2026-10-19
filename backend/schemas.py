@@ -206,9 +206,27 @@ class LeafImageOut(BaseModel):
         return value.astimezone(UTC)
 
 
+class DiagnosisOut(BaseModel):
+    """The fused result (backend/fusion.py): the CNN's call, gated by the weather risk."""
+
+    result_id: str
+    label: str  # the CNN's most probable class, unchanged by fusion
+    confidence: float
+    risk_score_used: float  # r
+    risk_basis: str  # learned_24h | hutton_today | hutton_fallback | neutral_prior
+    risk_for_date: date | None
+    risk_note: str
+    threshold_used: float  # tau(r)
+    late_blight_flagged: bool  # p_late >= tau(r)
+    risk_level: str
+    summary: str  # one decision-support sentence
+    contributing_readings: int  # sensor readings in the 48 h before the photo
+
+
 class ImageUploadOut(BaseModel):
     image: LeafImageOut
-    prediction: PredictionOut
+    prediction: PredictionOut  # the raw CNN output
+    diagnosis: DiagnosisOut  # after fusion with the weather risk
 
 
 # --- symptom reports (farmer-reported onset of visible disease) ----------
