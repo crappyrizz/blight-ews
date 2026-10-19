@@ -3,7 +3,7 @@
 import 'package:flutter/material.dart';
 
 import 'api.dart';
-import 'dashboard_screen.dart';
+import 'home_screen.dart';
 import 'main.dart';
 import 'widgets.dart';
 
@@ -60,7 +60,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       await api.register(_name.text.trim(), _phone.text.trim(), _password.text);
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const DashboardScreen()),
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
         (_) => false,
       );
     } on ApiException catch (e) {

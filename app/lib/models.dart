@@ -170,3 +170,194 @@ class Dashboard {
     );
   }
 }
+
+// --- leaf photo diagnosis -------------------------------------------------------
+
+/// The CNN's class names in the farmer's words.
+String diseaseName(String label) => switch (label) {
+      'late_blight' => 'Late blight',
+      'early_blight' => 'Early blight',
+      'healthy' => 'Healthy leaf',
+      _ => label.replaceAll('_', ' '),
+    };
+
+String percent(double value) => '${(value * 100).round()}%';
+
+class Diagnosis {
+  Diagnosis({
+    required this.label,
+    required this.confidence,
+    required this.pLate,
+    required this.risk,
+    required this.riskLevel,
+    required this.riskBasis,
+    required this.riskNote,
+    required this.threshold,
+    required this.flagged,
+    required this.summary,
+    this.smsAlert,
+  });
+
+  final String label; // the CNN's most likely class
+  final double confidence; // its probability
+  final double pLate; // the CNN's late-blight probability
+  final double risk; // r, the weather risk used
+  final RiskLevel riskLevel;
+  final String riskBasis; // learned_24h | hutton_today | hutton_fallback | neutral_prior
+  final String riskNote;
+  final double threshold; // tau(r)
+  final bool flagged; // pLate >= tau(r)
+  final String summary;
+  final String? smsAlert; // delivery status if an SMS went out
+
+  /// Where the weather risk came from, in words.
+  String get riskSource => switch (riskBasis) {
+        'learned_24h' => "the forecast made from your sensor's readings",
+        'hutton_today' => "today's sensor readings",
+        'hutton_fallback' => 'your sensor readings from a recent day',
+        _ => 'no recent weather readings, so a neutral value was used',
+      };
+
+  /// The reasoning, expanded on tap: how the weather moved the bar.
+  String get reasoning {
+    const neutral = 0.60; // TAU0 in backend/fusion.py: the bar when the risk is neutral
+    final String direction;
+    if (threshold < neutral - 0.005) {
+      direction = 'lowered the bar from ${percent(neutral)} to ${percent(threshold)}, '
+          'because the weather favours blight';
+    } else if (threshold > neutral + 0.005) {
+      direction = 'raised the bar from ${percent(neutral)} to ${percent(threshold)}, '
+          'because the weather does not favour blight';
+    } else {
+      direction = 'kept the bar at ${percent(threshold)}';
+    }
+    final verdict = flagged
+        ? 'The photo scored ${percent(pLate)} for late blight, which reaches the bar, so it is flagged.'
+        : 'The photo scored ${percent(pLate)} for late blight, which is below the bar, so it is not flagged.';
+    return 'Weather risk: ${percent(risk)}, from $riskSource. '
+        'To flag late blight the app $direction. $verdict';
+  }
+
+  factory Diagnosis.fromJson(Map<String, dynamic> d, Map<String, dynamic> prediction) {
+    final probabilities = (prediction['probabilities'] as Map?) ?? const {};
+    return Diagnosis(
+      label: d['label'] as String,
+      confidence: (d['confidence'] as num).toDouble(),
+      pLate: ((probabilities['late_blight'] as num?) ?? 0).toDouble(),
+      risk: (d['risk_score_used'] as num).toDouble(),
+      riskLevel: d['risk_basis'] == 'neutral_prior'
+          ? RiskLevel.unknown
+          : parseRiskLevel(d['risk_level'] as String?),
+      riskBasis: (d['risk_basis'] as String?) ?? '',
+      riskNote: (d['risk_note'] as String?) ?? '',
+      threshold: (d['threshold_used'] as num).toDouble(),
+      flagged: d['late_blight_flagged'] as bool,
+      summary: (d['summary'] as String?) ?? '',
+      smsAlert: d['sms_alert'] as String?,
+    );
+  }
+}
+
+class UploadResult {
+  UploadResult({required this.imageId, required this.diagnosis});
+
+  final String imageId;
+  final Diagnosis diagnosis;
+
+  factory UploadResult.fromJson(Map<String, dynamic> j) => UploadResult(
+        imageId: (j['image'] as Map<String, dynamic>)['image_id'] as String,
+        diagnosis: Diagnosis.fromJson(
+          j['diagnosis'] as Map<String, dynamic>,
+          j['prediction'] as Map<String, dynamic>,
+        ),
+      );
+}
+
+// --- history (FR viii) -------------------------------------------------------------
+
+enum HistoryKind { diagnosis, alert, risk }
+
+/// One line in the history list.
+class HistoryItem {
+  HistoryItem({required this.kind, required this.when, required this.title, required this.detail, this.level});
+
+  final HistoryKind kind;
+  final DateTime when; // local time; for a day's weather risk, the end of that day
+  final String title;
+  final String detail;
+  final RiskLevel? level;
+}
+
+class History {
+  History(this.items);
+
+  /// Newest first. Under each day, that day's weather risk comes first (it is
+  /// dated at the end of the day), then the day's photos and SMS, newest first.
+  final List<HistoryItem> items;
+
+  factory History.fromJson(Map<String, dynamic> j) {
+    final items = <HistoryItem>[];
+    for (final d in (j['diagnoses'] as List?) ?? const []) {
+      final m = d as Map<String, dynamic>;
+      final flagged = m['late_blight_flagged'] == true;
+      items.add(HistoryItem(
+        kind: HistoryKind.diagnosis,
+        when: DateTime.parse(m['timestamp'] as String).toLocal(),
+        title: 'Leaf photo: ${diseaseName(m['disease_label'] as String)} '
+            '(${percent((m['confidence'] as num).toDouble())})',
+        detail: flagged ? 'Late blight flagged' : 'Late blight not flagged',
+        level: parseRiskLevel(m['risk_level'] as String?),
+      ));
+    }
+    for (final a in (j['alerts'] as List?) ?? const []) {
+      final m = a as Map<String, dynamic>;
+      items.add(HistoryItem(
+        kind: HistoryKind.alert,
+        when: DateTime.parse(m['sent_at'] as String).toLocal(),
+        title: switch (m['alert_type']) {
+          'high_risk' => 'SMS: high risk warning',
+          'diagnosis' => 'SMS: leaf photo result',
+          _ => 'SMS: status',
+        },
+        detail: (m['message'] as String?) ?? '',
+      ));
+    }
+    for (final r in (j['risk'] as List?) ?? const []) {
+      final m = r as Map<String, dynamic>;
+      final day = DateTime.parse(m['for_date'] as String);
+      final sensor = (m['hutton'] as Map?)?['sensor'] as Map?;
+      final level = m['risk_level'] == null ? RiskLevel.unknown : parseRiskLevel(m['risk_level'] as String?);
+      items.add(HistoryItem(
+        kind: HistoryKind.risk,
+        when: DateTime(day.year, day.month, day.day, 23, 59),
+        title: level == RiskLevel.unknown
+            ? 'Weather risk: not known'
+            : 'Weather risk: ${riskLabel(level).replaceAll(' RISK', '').toLowerCase()}',
+        detail: (sensor?['label'] as String?) ?? 'No sensor readings',
+        level: level,
+      ));
+    }
+    items.sort((a, b) => b.when.compareTo(a.when));
+    return History(items);
+  }
+}
+
+// --- symptom onset reports ------------------------------------------------------------
+
+class SymptomReport {
+  SymptomReport({required this.onsetDate, this.notes});
+
+  final DateTime onsetDate;
+  final String? notes;
+
+  factory SymptomReport.fromJson(Map<String, dynamic> j) =>
+      SymptomReport(onsetDate: DateTime.parse(j['onset_date'] as String), notes: j['notes'] as String?);
+}
+
+const _weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+/// "Mon 12 Oct".
+String dayHeading(DateTime d) => '${_weekdays[d.weekday - 1]} ${shortDate(d)}';
+
+/// "14:05".
+String clockTime(DateTime d) => '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
