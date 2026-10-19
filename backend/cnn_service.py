@@ -163,14 +163,33 @@ def check_quality(image: Image.Image) -> dict:
 # --- preprocessing --------------------------------------------------------
 
 
-def to_model_input(image: Image.Image) -> np.ndarray:
-    """RGB image -> float32 [1, 224, 224, 3] in -1..1, exactly as in training.
+def centre_square(image: Image.Image) -> Image.Image:
+    """The largest centred square of the photo.
 
-    Each channel is resized in floating point ('F' mode), because Pillow's
-    8-bit resize rounds between its two passes and would drift from
-    TensorFlow's by about 0.3 grey levels on average.
+    The CNN was trained on square images (PlantVillage, 256x256). Squashing a
+    rectangular phone photo straight to 224x224 distorts the leaf: a tall
+    1600x739 photo was squeezed to less than half its width, and a clear
+    early-blight leaf then came out as 100 % late blight (the same photo,
+    centre-cropped, was 100 % early blight). Cropping first keeps the
+    leaf's real proportions, as in training. For a square image (every
+    training image) the crop changes nothing, so training and serving still
+    match exactly.
     """
-    rgb = np.asarray(image.convert("RGB"), dtype=np.float32)
+    width, height = image.size
+    side = min(width, height)
+    left, top = (width - side) // 2, (height - side) // 2
+    return image.crop((left, top, left + side, top + side))
+
+
+def to_model_input(image: Image.Image) -> np.ndarray:
+    """RGB image -> float32 [1, 224, 224, 3] in -1..1, as in training.
+
+    Centre square crop (see centre_square), then each channel is resized in
+    floating point ('F' mode), because Pillow's 8-bit resize rounds between
+    its two passes and would drift from TensorFlow's by about 0.3 grey
+    levels on average.
+    """
+    rgb = np.asarray(centre_square(image.convert("RGB")), dtype=np.float32)
     channels = [
         np.asarray(
             Image.fromarray(rgb[..., c], mode="F").resize(

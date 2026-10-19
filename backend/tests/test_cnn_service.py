@@ -101,14 +101,26 @@ def test_preprocess_converts_any_mode_to_rgb(mode):
     assert model_input.shape == (1, 224, 224, 3)
 
 
-def test_non_square_photo_is_resized_like_training_without_cropping():
-    # A 400x200 image, left half black and right half white: squashed to
-    # 224x224 (as tf.image.resize did in training), both halves survive.
+def test_non_square_photo_is_centre_cropped_not_squashed():
+    # 400x200: black margins left and right, a white 200x200 square in the
+    # middle. The centre crop keeps only the square, undistorted.
     pixels = np.zeros((200, 400, 3), dtype=np.uint8)
-    pixels[:, 200:] = 255
+    pixels[:, 100:300] = 255
     model_input = cnn_service.preprocess(encode(Image.fromarray(pixels), "PNG"))[0]
-    assert np.allclose(model_input[:, :100], -1.0)
-    assert np.allclose(model_input[:, 124:], 1.0)
+    assert np.allclose(model_input, 1.0)
+
+
+def test_tall_photo_keeps_the_middle():
+    # Portrait phone photo: the middle square is kept, top and bottom dropped.
+    pixels = np.zeros((400, 200, 3), dtype=np.uint8)
+    pixels[100:300, :] = 255
+    assert np.allclose(cnn_service.preprocess(encode(Image.fromarray(pixels), "PNG"))[0], 1.0)
+
+
+def test_a_square_image_is_not_changed_by_the_crop():
+    image = leaf_like(size=(256, 256))
+    assert cnn_service.centre_square(image).size == (256, 256)
+    assert np.array_equal(np.asarray(cnn_service.centre_square(image)), np.asarray(image))
 
 
 def test_phone_rotation_in_exif_is_applied():

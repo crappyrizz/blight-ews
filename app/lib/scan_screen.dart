@@ -98,7 +98,8 @@ class _ScanScreenState extends State<ScanScreen> {
               contentPadding: const EdgeInsets.all(16),
               leading: const Icon(Icons.tips_and_updates_outlined, size: 32),
               title: Text('For a good photo', style: text.titleMedium),
-              subtitle: Text('One leaf, good light, fill the frame.', style: text.bodyLarge),
+              subtitle: Text('One leaf, good light, fill the frame. Keep the leaf in the middle: '
+                  'the middle square of the photo is what gets checked.', style: text.bodyLarge),
             ),
           ),
           const SizedBox(height: 16),
