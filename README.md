@@ -3,7 +3,120 @@
 Final-year BSc ICS project, Strathmore University.
 Student: Edgar Kareithi (164951). Supervisor: Juliet Kirui.
 
+[![tests](https://github.com/crappyrizz/blight-ews/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/crappyrizz/blight-ews/actions/workflows/tests.yml)
+
+## Summary
+
+An early-warning system for potato late blight on one smallholder farm in Kinangop (Nyandarua, Kenya). A sensor node on the plot logs temperature and humidity; the backend turns those readings into a daily blight-weather risk (the Hutton Criteria, plus a learned 24 h / 48 h forecast); the farmer photographs a leaf in the Flutter app and a CNN on the server classifies it; the weather risk moves the CNN's late-blight threshold (fusion); and the farmer is told by SMS. Everything is framed as **decision support, never instructions**: the farmer has said he will not act on an unproven system, so the system explains itself and lets him decide.
+
+```
+ESP32 + SHT31 node ──POST /nodes/{id}/readings──▶  FastAPI backend  ◀──JWT──  Flutter app (Android)
+ (simulator until the                              │  hutton.py      Hutton day / period per local day      │ capture leaf, dashboard,
+  hardware arrives)                                │  risk_model.py  learned 24 h / 48 h forecast           │ diagnosis, history, report
+                                                   │  risk_job.py    hourly: score every node, alert        │
+ Open-Meteo ERA5-Land archive ──ml/fetch_weather──▶│  cnn_service.py TFLite CNN, server side ◀──POST /images─┘
+                                                   │  fusion.py      tau(r): risk moves the late-blight bar
+                                                   │  alerts.py      SMS policy ──▶ Africa's Talking ──▶ farmer's phone
+                                                   └─ PostgreSQL (10 tables)
+```
+
+## Architecture
+
+![System architecture (Figure 4.11)](docs/architecture.png)
+
+*Figure 4.11: system architecture.* The four layers:
+
+| Layer | What runs there | Code |
+|---|---|---|
+| Field | ESP32 + SHT31 node: samples, buffers offline, uploads batches with its own key | `docs/firmware_contract.md`; `tools/simulate_node.py` until the hardware exists |
+| Backend | FastAPI API, the hourly risk job (APScheduler), the TFLite CNN, fusion, SMS | `backend/` |
+| Data | PostgreSQL: readings, weather, risk scores, images, diagnoses, alerts, symptom reports | `backend/models.py`, `alembic/` |
+| Farmer | Flutter app (Android) and SMS | `app/`, `backend/alerts.py` |
+
+Training happens off the server: the CNN in Google Colab (`ml/train_cnn.ipynb`), the risk model on the PC (`ml/train_risk.py`). The backend only loads the saved models from `models/`.
+
+## Setup on Windows
+
+Everything runs from the repo root in PowerShell.
+
+**Prerequisites:** Python 3.11; PostgreSQL 15 or newer (developed on 18; the weather table needs `NULLS NOT DISTINCT`, new in 15), from the EnterpriseDB Windows installer; Git. For the app only: Flutter SDK and Android Studio (see [Mobile app](#mobile-app-app-flutter-android)).
+
+```powershell
+# 1. PostgreSQL: one user and two databases (the second is only for the tests), as the postgres superuser
+psql -U postgres -c "CREATE USER blight WITH PASSWORD 'choose-a-password';"
+psql -U postgres -c "CREATE DATABASE blight_ews OWNER blight;"
+psql -U postgres -c "CREATE DATABASE blight_ews_test OWNER blight;"
+
+# 2. Virtual environment, dependencies, .env from .env.example, git hooks
+.\dev.ps1 setup
+#    Open .env and fill in: the database password in DATABASE_URL and TEST_DATABASE_URL,
+#    JWT_SECRET (any long random string), AT_API_KEY (Africa's Talking sandbox key).
+#    Never commit .env; a pre-commit hook refuses it.
+
+# 3. Create / update the tables
+.\dev.ps1 db-migrate
+
+# 4. Seed one admin, one farmer and one sensor node (safe to re-run).
+#    Passwords and the node key are printed ONCE: put the node's ID and key in .env as NODE_ID / NODE_KEY.
+.\dev.ps1 seed
+
+# 5. Weather history for the plot (ERA5-Land, 2015 to now), used by the risk model and the simulator
+.\dev.ps1 fetch-weather --source archive --start 2015-01-01 --end 2026-10-12
+
+# 6. Models: the learned risk model is trained locally; the CNN comes from Colab (see Model training)
+.\.venv\Scripts\python.exe -m ml.train_risk
+```
+
+`.\dev.ps1` with no argument lists every command.
+
+## Running
+
+| What | Command | Notes |
+|---|---|---|
+| Backend API | `.\dev.ps1 serve` | http://127.0.0.1:8000/health and the API docs at `/docs`. The hourly risk job starts with it. For the phone, use `--host 0.0.0.0` (see the app section). |
+| Simulated node (backfill) | `.\.venv\Scripts\python.exe -m tools.simulate_node --replay --start 2026-08-15 --end 2026-09-20 --speed max` | Replays archive weather through the ingest API, exactly as the firmware will (+4 % canopy RH, noise, outages). |
+| Simulated node (live) | `.\.venv\Scripts\python.exe -m tools.simulate_node --live --start 2026-09-01 --every 5` | One reading every 5 s. |
+| Risk job, once by hand | `.\.venv\Scripts\python.exe -m backend.risk_job --once [--date YYYY-MM-DD]` | Hutton + learned scores for every node and both sources, then the high-risk SMS check. |
+| App on the phone | `cd app; flutter run` | Details, Wi-Fi vs USB, in [Mobile app](#mobile-app-app-flutter-android). |
+| Real SMS | set `SMS_DRY_RUN=false` in `.env` | Default is a dry run (logged, not sent). Sandbox messages appear in the [Africa's Talking simulator](https://simulator.africastalking.com). |
+
+**Firmware contract.** The node's API (headers, payload, limits, status codes, buffering and retry rules) is in [docs/firmware_contract.md](docs/firmware_contract.md). The simulator follows it exactly, so the real ESP32 can replace it without a server change.
+
+## Tests and evaluations
+
+```powershell
+.\dev.ps1 test                                    # the whole pytest suite (uses TEST_DATABASE_URL, never the real database)
+.\dev.ps1 test backend/tests/test_e2e.py          # end to end: seed → wet week → risk job → photo → fusion → SMS → cooldown
+cd app; flutter analyze; flutter test; cd ..      # the app
+.\.venv\Scripts\python.exe -m ml.run_all_evals    # regenerate every Chapter 5 table and figure in docs/
+```
+
+- **End-to-end test** ([backend/tests/test_e2e.py](backend/tests/test_e2e.py)): seeds the farm, replays a wet week through the simulator and the ingest API, runs the risk job (the plot turns high and the high-risk SMS goes out), uploads a late-blight leaf that fusion flags only because the risk is high, checks the diagnosis SMS was queued (dry run), and checks the 24 h cooldown. One test, readable top to bottom.
+- **CI** runs lint and the whole suite against PostgreSQL 16 on every push and pull request (see [Continuous integration](#continuous-integration)).
+- **Evaluation outputs**, all in `docs/`: [risk_eval.md](docs/risk_eval.md) (learned model vs baselines), [cnn_domain_gap.md](docs/cnn_domain_gap.md) (CNN, lab vs field), [fusion_eval.md](docs/fusion_eval.md), [sensor_vs_api.md](docs/sensor_vs_api.md), [cost_threshold.md](docs/cost_threshold.md), and the functional test plan [test_plan.md](docs/test_plan.md) (FR i–viii; the manual app checks are filled in from [manual_app_checklist.csv](docs/manual_app_checklist.csv)).
+
+## Model training
+
+- **CNN:** [open ml/train_cnn.ipynb in Google Colab](https://colab.research.google.com/github/crappyrizz/blight-ews/blob/main/ml/train_cnn.ipynb), choose a GPU runtime and *Runtime → Run all*. It rebuilds the committed PlantVillage split, trains MobileNetV2, and downloads `cnn_outputs.zip`; put `cnn.tflite` and `labels.txt` in `models/`. Details in [CNN training](#cnn-training-mltrain_cnnipynb-and-the-lab-to-field-check-mleval_cnnpy).
+- **Learned risk model:** `.\.venv\Scripts\python.exe -m ml.train_risk`, then `-m ml.eval_risk`. Details in [Learned risk model](#learned-risk-model-mlbuild_featurespy-mltrain_riskpy-mleval_riskpy-backendrisk_modelpy).
+- Model files are gitignored (`labels.txt` excepted); each script above recreates them.
+
+## Known limitations
+
+- **Simulated sensor data until the hardware exists.** Every "sensor" reading so far comes from `tools/simulate_node.py` replaying Open-Meteo weather with a canopy offset, not from the ESP32. Results built on it (the sensor-vs-API comparison, the dashboard) describe the simulator, and the reports say so in a banner. The readings stored before 12 Oct 2026 were replayed from ECMWF IFS data, before the archive was pinned to ERA5-Land.
+- **The learned model forecasts Hutton conditions, not blight onset.** Its targets are Hutton days and periods computed from weather; there is no disease ground truth yet. The farmer's symptom-onset reports (`symptom_reports`) are the data that could link the two. The cost analysis treats a Hutton period as an infection, which overstates misses when no inoculum is present.
+- **Very few field images.** The CNN scores 99.4 % on PlantVillage lab images (single leaves, plain backgrounds); no field photos from the farm are registered yet, so its accuracy on real field photos is unmeasured. It is overconfident on unusual photos (before the centre-crop fix, a squashed photo of an early-blight leaf on a laptop screen came out 100 % late blight), which is what fusion and the quality check guard against.
+- **One farm, one node, one test year.** All risk numbers come from one location and one held-out year of weather.
+- **Development settings.** The app talks to the API over plain HTTP on the local network (`network_security_config.xml`); production needs HTTPS. SMS uses the Africa's Talking sandbox.
+
+---
+
+# Reference
+
+The sections below are the detailed design and the working conventions for this repository.
+
 ## What the system does
+
 
 Forecasts potato late blight risk for one smallholder potato farm in Kinangop (Nyandarua, Kenya) from on-farm microclimate data, confirms visual symptoms with a CNN, fuses the two, and alerts the farmer by SMS.
 
@@ -88,11 +201,11 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 
 ## Leaf images and the CNN (FR iv, v)
 
-- `POST /images` (farmer JWT, multipart: `file`, optional `capture_date` with timezone) stores the photo under `data/uploads/<farmer_id>/<image_id>.<ext>`, adds a `leaf_images` row, runs the CNN and returns `{"image": {...}, "prediction": {"label", "confidence", "probabilities"}}`. Fusion with the weather risk is a marked hook in `backend/app.py`, not built yet.
+- `POST /images` (farmer JWT, multipart: `file`, optional `capture_date` with timezone) stores the photo under `data/uploads/<farmer_id>/<image_id>.<ext>`, adds a `leaf_images` row, runs the CNN and returns `{"image": {...}, "prediction": {"label", "confidence", "probabilities"}}`. It also fuses the prediction with the weather risk and returns the `diagnosis` (see Fusion below).
 - **Quality check first.** A photo the model cannot judge fairly is refused with 422 and `{"reason", "message"}`, and nothing is stored, so the app can ask for a retake. Reasons: `unreadable`, `too_small` (short side < 224 px), `too_dark` (mean grey < 40), `too_blurry` (variance of the Laplacian < 50). The thresholds are named constants in `backend/cnn_service.py`, calibrated so that none of the 2,152 PlantVillage images is rejected; re-check them once field photos exist.
 - `GET /images/{image_id}`: own images only (404 otherwise, like nodes).
 - The model (`models/cnn.tflite`, `models/labels.txt`) is loaded once at startup. If it is missing, the API still runs and `POST /images` answers 503.
-- Preprocessing mirrors training: RGB, EXIF rotation applied, 224×224 bilinear antialiased resize done in floating point (matches TensorFlow's to within 0.004 grey levels), then `x / 127.5 - 1`. The one unavoidable difference: training decoded JPEGs with TensorFlow's fast IDCT and Pillow uses the accurate one, so pixels can differ by up to 4/255 (about 1/255 on average).
+- Preprocessing mirrors training: RGB, EXIF rotation applied, the largest centred square cropped out (training images are square, so a phone photo is cropped rather than squashed; a square image is unchanged), 224×224 bilinear antialiased resize done in floating point (matches TensorFlow's to within 0.004 grey levels), then `x / 127.5 - 1`. The one unavoidable difference: training decoded JPEGs with TensorFlow's fast IDCT and Pillow uses the accurate one, so pixels can differ by up to 4/255 (about 1/255 on average).
 
 ## Risk job, dashboard, history and symptom reports
 
@@ -218,7 +331,7 @@ Notes on the image export:
 
 - **Mendeley and TFDS.** Mendeley answers Python's HTTP client with 403 whatever the headers, while `curl` gets the file. So the notebook tries `tfds` first, then falls back to downloading the same archive with `curl` and reading it with the rule TFDS's `plant_village` builder uses (same files, labels and filenames).
 - **Matching the split.** TFDS records each image's original archive filename. `ml/prepare_images.py` numbered images in sorted filename order and dropped none, so the notebook maps them back to the split-CSV names exactly. `backend/tests/test_train_cnn_notebook.py` checks that the rebuild equals the committed CSVs.
-- **Model input:** float32 `[1, 224, 224, 3]`, RGB, bilinear antialiased resize, then `x / 127.5 - 1` (MobileNetV2's `preprocess_input`). Outputs are in `labels.txt` order: `early_blight`, `healthy`, `late_blight`.
+- **Model input:** float32 `[1, 224, 224, 3]`, RGB, centre square crop, bilinear antialiased resize, then `x / 127.5 - 1` (MobileNetV2's `preprocess_input`). Outputs are in `labels.txt` order: `early_blight`, `healthy`, `late_blight`.
 
 ## Mobile app (app/, Flutter, Android)
 
@@ -252,27 +365,3 @@ flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 - **pytest**: starts a PostgreSQL 16 service, applies the Alembic migrations, and runs the full pytest suite on Python 3.11.
 
 The same hooks run locally on every `git commit` (installed by `.\dev.ps1 setup`); `.\dev.ps1 lint` runs them on the whole repo.
-
-## Setup
-
-Requires Python 3.11 and PostgreSQL 15+ (developed on 18). All commands run from the repo root in PowerShell.
-
-```powershell
-# 1. Virtual environment, dependencies, .env from the template, git hooks
-.\dev.ps1 setup
-#    then open .env and fill in the database password and secrets
-
-# 2. Create / update the database tables
-.\dev.ps1 db-migrate
-
-# 3. Seed one admin, one farmer and one sensor node (safe to re-run)
-.\dev.ps1 seed
-
-# 4. Run the tests (uses TEST_DATABASE_URL, never the real database)
-.\dev.ps1 test
-
-# 5. Start the API, then open http://127.0.0.1:8000/health
-.\dev.ps1 serve
-```
-
-The database user and the two databases (`blight_ews`, `blight_ews_test`) are created once by hand with `psql` as the `postgres` superuser.

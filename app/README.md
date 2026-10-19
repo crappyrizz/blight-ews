@@ -1,17 +1,11 @@
-# blight_ews
+# blight_ews (Flutter app)
 
-Blight early warning for potato farmers
+The farmer's Android app for the Blight Early-Warning System: login, dashboard, leaf capture, diagnosis, history and symptom reports.
 
-## Getting Started
+How to run it on a phone (Wi-Fi or USB), the server address and the screens are described in the main README: [Mobile app](../README.md#mobile-app-app-flutter-android).
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```powershell
+flutter analyze
+flutter test
+flutter run --dart-define=API_BASE_URL=http://<PC-IP>:8000
+```
