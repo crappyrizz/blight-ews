@@ -207,7 +207,7 @@ Notes on the image export:
 
 ## Mobile app (app/, Flutter, Android)
 
-Flat layout: `lib/main.dart` (theme, start screen), `lib/api.dart` (every backend call, the login token in `flutter_secure_storage`, and errors turned into plain sentences), `lib/models.dart`, `lib/widgets.dart`, and one file per screen (`login_screen.dart`, `register_screen.dart`, `dashboard_screen.dart`).
+Flat layout: `lib/main.dart` (theme, start screen), `lib/api.dart` (every backend call, the login token in `flutter_secure_storage`, errors turned into plain sentences, and no exception other than `ApiException` ever escaping), `lib/models.dart`, `lib/widgets.dart`, and one file per screen: `login_screen.dart`, `register_screen.dart`, `home_screen.dart` (bottom navigation: Home, Scan, History, Report), `dashboard_screen.dart` (with "Send me a status SMS"), `scan_screen.dart` (camera or gallery, upload progress, Retake on a quality-check rejection), `diagnosis_screen.dart` (the CNN result, flag, risk, and the r/tau reasoning on tap), `history_screen.dart` and `report_screen.dart` (symptom onset date, no future days).
 
 - **Server address:** the single constant `apiBaseUrl` in `lib/api.dart` (default: the PC's Wi-Fi address). Override it without editing: `flutter run --dart-define=API_BASE_URL=http://<PC-IP>:8000`. From the Android emulator, the PC is `http://10.0.2.2:8000`.
 - **Plain HTTP is allowed for development only** (`android/app/src/main/res/xml/network_security_config.xml`). Remove it for production and serve the API over HTTPS.
@@ -220,9 +220,13 @@ Flat layout: `lib/main.dart` (theme, start screen), `lib/api.dart` (every backen
 # 2. Once, in an ADMIN PowerShell: allow port 8000 on private networks only
 New-NetFirewallRule -DisplayName "Blight EWS API (dev)" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private
 
-# 3. Run the app (phone with USB debugging, or a started emulator)
+# 3. Run the app on the phone (USB debugging on, phone on the same Wi-Fi)
 cd app
 flutter run
+
+# Or over the USB cable only, with no Wi-Fi or firewall involved:
+adb reverse tcp:8000 tcp:8000
+flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ```
 
 ## Continuous integration

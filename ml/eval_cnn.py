@@ -30,7 +30,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 from backend.config import REPO_ROOT
 
@@ -50,13 +49,13 @@ DEFAULT_REPORT = REPO_ROOT / "docs" / "cnn_domain_gap.md"
 def preprocess(path: Path) -> np.ndarray:
     """One image file -> float32 array [1, 224, 224, 3] scaled to -1..1.
 
-    PIL's bilinear resize antialiases when shrinking, like the notebook's
-    tf.image.resize(..., antialias=True).
+    Exactly the server's preprocessing (backend/cnn_service.py: EXIF
+    rotation, centre square crop, float bilinear resize, x / 127.5 - 1), so
+    the field numbers here are the field numbers the farmer gets.
     """
-    with Image.open(path) as image:
-        rgb = image.convert("RGB").resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.BILINEAR)
-    array = np.asarray(rgb, dtype=np.float32)
-    return (array / 127.5 - 1.0)[np.newaxis]
+    from backend import cnn_service
+
+    return cnn_service.to_model_input(cnn_service.load_image(Path(path).read_bytes()))
 
 
 def read_labels(path: Path) -> list[str]:

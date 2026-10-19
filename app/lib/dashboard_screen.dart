@@ -5,24 +5,33 @@
 import 'package:flutter/material.dart';
 
 import 'api.dart';
-import 'login_screen.dart';
 import 'main.dart';
 import 'models.dart';
 import 'widgets.dart';
 
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key});
+  const DashboardScreen({
+    super.key,
+    required this.node,
+    this.farmId,
+    required this.onScan,
+    required this.onHistory,
+  });
+
+  final SensorNode node;
+  final String? farmId;
+  final VoidCallback onScan; // switch to the Scan tab
+  final VoidCallback onHistory; // switch to the History tab
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  SensorNode? _node;
-  String? _farmId;
   Dashboard? _dashboard;
   String? _error;
   bool _loading = true;
+  bool _sendingSms = false;
 
   @override
   void initState() {
@@ -33,30 +42,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _load() async {
     setState(() => _error = null);
     try {
-      if (_node == null) {
-        final me = await api.me();
-        final nodes = await api.nodes();
-        if (nodes.isEmpty) {
-          setState(() {
-            _error = 'No sensor is linked to your account yet. '
-                'Please contact your extension officer to set one up.';
-            _loading = false;
-          });
-          return;
-        }
-        _farmId = me.farmId;
-        _node = nodes.first; // one plot per farmer for now
-      }
-      final dashboard = await api.dashboard(_node!.nodeId);
+      final dashboard = await api.dashboard(widget.node.nodeId);
+      if (!mounted) return;
       setState(() {
         _dashboard = dashboard;
         _loading = false;
       });
     } on ApiException catch (e) {
       if (e.sessionExpired) {
-        await _toLogin();
+        if (mounted) await goToLogin(context);
         return;
       }
+      if (!mounted) return;
       setState(() {
         _error = e.message;
         _loading = false;
@@ -64,12 +61,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  Future<void> _toLogin() async {
-    await api.logout();
+  /// "Send me a status SMS": the server sends it only when the risk is judged
+  /// low; otherwise it says why not, and that is shown as it is.
+  Future<void> _statusSms() async {
+    setState(() => _sendingSms = true);
+    String message;
+    try {
+      await api.statusSms(widget.node.nodeId);
+      message = 'Done: a status SMS is on its way to your phone.';
+    } on ApiException catch (e) {
+      if (e.sessionExpired) {
+        if (mounted) await goToLogin(context);
+        return;
+      }
+      message = e.message;
+    }
     if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (_) => false,
+    setState(() => _sendingSms = false);
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Status SMS'),
+        content: Text(message),
+        actions: [FilledButton(onPressed: () => Navigator.pop(context), child: const Text('OK'))],
+      ),
     );
   }
 
@@ -85,16 +100,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
     );
-    if (yes == true) await _toLogin();
-  }
-
-  void _comingSoon(String what) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$what is coming in the next version.')));
+    if (yes == true && mounted) await goToLogin(context);
   }
 
   @override
   Widget build(BuildContext context) {
-    final title = _node == null ? 'My plot' : _node!.location + (_farmId == null ? '' : ' ($_farmId)');
+    final title = widget.node.location + (widget.farmId == null ? '' : ' (${widget.farmId})');
     return Scaffold(
       appBar: AppBar(
         title: Text(title),
@@ -133,15 +144,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
         OutlookRow(day1: d.outlook24, day2: d.outlook48),
         const SizedBox(height: 24),
         FilledButton.icon(
-          onPressed: () => _comingSoon('Scanning a leaf'),
+          onPressed: widget.onScan,
           icon: const Icon(Icons.camera_alt),
           label: const Text('Scan Leaf'),
         ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
-          onPressed: () => _comingSoon('History'),
+          onPressed: widget.onHistory,
           icon: const Icon(Icons.history),
           label: const Text('View History'),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: _sendingSms ? null : _statusSms,
+          icon: _sendingSms
+              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.sms_outlined),
+          label: const Text('Send me a status SMS'),
         ),
         const SizedBox(height: 8),
         Text('Pull down to refresh.', textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
@@ -322,28 +341,6 @@ class _OutlookTile extends StatelessWidget {
             ],
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// A simple card with an icon, a title and a line of text.
-class InfoTile extends StatelessWidget {
-  const InfoTile({super.key, required this.icon, required this.title, required this.body});
-
-  final IconData icon;
-  final String title;
-  final String body;
-
-  @override
-  Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    return Card(
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: Icon(icon, size: 30),
-        title: Text(title, style: text.bodyMedium),
-        subtitle: Text(body, style: text.titleMedium),
       ),
     );
   }

@@ -9,7 +9,7 @@
 import 'package:flutter/material.dart';
 
 import 'api.dart';
-import 'dashboard_screen.dart';
+import 'home_screen.dart';
 import 'login_screen.dart';
 
 /// One API client for the whole app.
@@ -69,7 +69,7 @@ class StartScreen extends StatelessWidget {
         if (!snapshot.hasData) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
-        return snapshot.data! ? const DashboardScreen() : const LoginScreen();
+        return snapshot.data! ? const HomeScreen() : const LoginScreen();
       },
     );
   }

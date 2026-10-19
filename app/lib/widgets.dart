@@ -4,7 +4,19 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'login_screen.dart';
+import 'main.dart';
 import 'models.dart';
+
+/// The session ended (or the farmer logged out): forget the token, go to login.
+Future<void> goToLogin(BuildContext context) async {
+  await api.logout();
+  if (!context.mounted) return;
+  Navigator.of(context).pushAndRemoveUntil(
+    MaterialPageRoute(builder: (_) => const LoginScreen()),
+    (_) => false,
+  );
+}
 
 /// Risk colours. Each is dark enough for white text (contrast above 4.5:1),
 /// and every level also has its own icon and words, so colour is never the
@@ -107,4 +119,26 @@ class _GaugePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_GaugePainter old) => old.score != score || old.color != color;
+}
+
+/// A simple card with an icon, a title and a line of text.
+class InfoTile extends StatelessWidget {
+  const InfoTile({super.key, required this.icon, required this.title, required this.body});
+
+  final IconData icon;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Card(
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: Icon(icon, size: 30),
+        title: Text(title, style: text.bodyMedium),
+        subtitle: Text(body, style: text.titleMedium),
+      ),
+    );
+  }
 }

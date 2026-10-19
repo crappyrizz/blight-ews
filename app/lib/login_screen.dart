@@ -3,7 +3,7 @@
 import 'package:flutter/material.dart';
 
 import 'api.dart';
-import 'dashboard_screen.dart';
+import 'home_screen.dart';
 import 'main.dart';
 import 'register_screen.dart';
 import 'widgets.dart';
@@ -43,7 +43,7 @@ class _LoginScreenState extends State<LoginScreen> {
       await api.login(phone, _password.text);
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const DashboardScreen()),
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
       );
     } on ApiException catch (e) {
       setState(() => _error = e.message);
