@@ -35,7 +35,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from backend import hutton, risk_model
+from backend import alerts, hutton, risk_model
 from backend.config import settings
 from backend.models import RiskScore, SensorNode
 
@@ -115,6 +115,9 @@ def run_once(session: Session, today: date | None = None) -> list[dict]:
                 "hutton": {str(d): row["status"] for d, row in daily.iterrows()},
                 "learned_days_judged": learned_judged,
             })
+        # The high-risk SMS policy (backend/alerts.py), on the plot's own sensor risk.
+        alert = alerts.check_high_risk(session, node, today)
+        summary[-1]["high_risk_sms"] = None if alert is None else alert.delivery_status
         session.commit()  # one node at a time: a failure later keeps this node's scores
     return summary
 

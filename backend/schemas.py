@@ -221,6 +221,7 @@ class DiagnosisOut(BaseModel):
     risk_level: str
     summary: str  # one decision-support sentence
     contributing_readings: int  # sensor readings in the 48 h before the photo
+    sms_alert: str | None = None  # delivery_status of the diagnosis SMS, if one was sent
 
 
 class ImageUploadOut(BaseModel):
@@ -247,3 +248,18 @@ class SymptomReportOut(BaseModel):
     onset_date: date
     notes: str | None
     reported_at: datetime
+
+
+# --- SMS alerts -----------------------------------------------------------
+
+
+class AlertOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    alert_id: str
+    node_id: str
+    alert_type: str
+    message: str
+    sent_at: datetime
+    delivery_status: str
+    provider_message_id: str | None
