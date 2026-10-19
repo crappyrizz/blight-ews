@@ -41,7 +41,8 @@ backend/   FastAPI app: app.py, config.py, db.py, models.py, schemas.py, auth.py
            ingest.py, hutton.py, risk_model.py, risk_job.py, cnn_service.py, fusion.py,
            alerts.py, sms.py, tests/
 ml/        fetch_weather.py, build_features.py, train_risk.py, eval_risk.py, train_cnn.ipynb,
-           eval_cnn.py, compare_sensor_vs_api.py, cost_threshold.py
+           eval_cnn.py, compare_sensor_vs_api.py, cost_threshold.py, make_test_plan.py,
+           run_all_evals.py
 tools/     simulate_node.py, seed.py
 app/       Flutter project
 firmware/  (later)
@@ -156,6 +157,20 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 - **Time-ordered split, never shuffled:** test = the most recent 12 months, validation = the 12 before, train = the rest, with a 2-day embargo before each boundary (y48 looks two days ahead). The grid and the decision threshold are chosen on validation; the model is refit on train + validation and scored once on test against persistence, monthly climatology and Hutton-on-forecast, with block-bootstrap intervals.
 - **Serving:** `backend.risk_model.predict_for_node(node_id, for_date, data_source)` builds day D's features from the database with the same functions as training (a test checks they are identical) and returns `p24` / `p48`, or `None` when day D could not be judged.
 - scikit-learn and joblib are pinned exactly in `requirements.txt`: a saved model must be loaded with the version that trained it. The `.joblib` files are gitignored; re-create them with `ml.train_risk`.
+
+## Chapter 5 evaluation (one command)
+
+```powershell
+.\.venv\Scripts\python.exe -m ml.run_all_evals                        # everything, sensor data marked SIMULATED
+.\.venv\Scripts\python.exe -m ml.run_all_evals --sensor-data real     # once the ESP32 node is in the field
+.\.venv\Scripts\python.exe -m ml.run_all_evals --pump-loads 12 --skip-tests
+```
+
+It re-runs, in order, `ml.eval_risk`, `ml.eval_cnn`, `ml.fusion_eval`, `ml.compare_sensor_vs_api`, `ml.cost_threshold` and `ml.make_test_plan`, writes their markdown tables and PNG figures to `docs/`, and prints the headline numbers. Nothing is retrained. A failing step does not stop the others; the summary names it and the exit code is 1.
+
+- **Sensor vs API** (`docs/sensor_vs_api.md`): Hutton days and periods from the node vs the ERA5-Land archive at the same point, a 2×2 agreement table with Cohen's kappa, humid-hour differences and a timeline. The node table has no "simulated" flag, so `--sensor-data` says where the readings came from and defaults to **simulated**; every output carries a large banner saying which it is.
+- **Cost threshold** (`docs/cost_threshold.md`): C = KES 2,500 chemical + 50 × pump loads (unknown, so 5 / 10 / 20 are shown); L = 20 bags × KES 2,500-5,000. Threshold = C_FP / (C_FP + C_FN) with C_FN = L − C, i.e. C / L. The 48 h model is then played through its test year (a spray covers 7 days; a spell of Hutton-period days with any day uncovered costs L once) against never, always-covered, and a calendar of 4 sprays per 120-day crop (year-round planting).
+- **Test plan** (`docs/test_plan.md`): FR i–viii as ID | Module | Test case | Input | Expected | Actual | Pass/Fail. Automated rows are filled from a real run of the whole pytest suite. Manual rows come from `docs/manual_app_checklist.csv`: do each check on the phone and fill in its Actual, Pass/Fail and Date columns there; an unchecked row stays Pending.
 
 ## Data preparation and documentation
 
