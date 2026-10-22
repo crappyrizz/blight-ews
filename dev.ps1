@@ -94,6 +94,10 @@ switch ($Command) {
         # Needs tensorflow-cpu and tensorflow-datasets installed (see README).
         & $python -m ml.prepare_images @Rest
     }
+    "register-device" {
+        # .\dev.ps1 register-device node-01 "Bench node A" [--key-file device_keys.local.env]
+        & $python -m tools.register_device @Rest
+    }
     "register-field-images" {
         # Scans data/field_images/ and appends new photos to metadata.csv.
         & $python -m ml.register_field_images @Rest
@@ -114,6 +118,7 @@ switch ($Command) {
         Write-Host "  seed                   create the seed farmer, admin and node"
         Write-Host "  fetch-weather          pull Open-Meteo weather (see --help)"
         Write-Host "  prepare-images         export PlantVillage potato images and splits"
+        Write-Host "  register-device        register a sensor device and print its key once"
         Write-Host "  register-field-images  register the farmer's field photos"
         Write-Host "  weather-quality        write the weather data-quality report"
         if ($Command -ne "help") { exit 1 }

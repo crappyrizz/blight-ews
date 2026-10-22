@@ -82,6 +82,39 @@ psql -U postgres -c "CREATE DATABASE blight_ews_test OWNER blight;"
 
 **Firmware contract.** The node's API (headers, payload, limits, status codes, buffering and retry rules) is in [docs/firmware_contract.md](docs/firmware_contract.md). The simulator follows it exactly, so the real ESP32 can replace it without a server change.
 
+## Exposing the API for devices
+
+ESP32 nodes in the field, and nodes in the Wokwi simulator (whose free plan cannot reach `localhost`), need a public HTTPS address. For development, a **Cloudflare quick tunnel** gives the local backend one, with no account and no router changes:
+
+```powershell
+winget install --id Cloudflare.cloudflared --exact      # once (open a new PowerShell afterwards)
+
+.\dev.ps1 serve                                           # window 1: the backend on 127.0.0.1:8000
+cloudflared tunnel --url http://127.0.0.1:8000            # window 2: prints https://<random-words>.trycloudflare.com
+```
+
+- Devices then post to `https://<random-words>.trycloudflare.com/readings` with their `X-Device-Key` (see [docs/firmware_contract.md](docs/firmware_contract.md) §4a). The tunnel adds HTTPS; on the ESP32 use `WiFiClientSecure` (for a bench test, `setInsecure()` skips certificate checks).
+- The URL is random and **changes every time** the tunnel restarts, so update the firmware or Wokwi sketch each time. Quick tunnels have no uptime guarantee and are for development only.
+- While the tunnel runs, the whole API (including `/docs`) is reachable by anyone with the URL. Device keys and farmer logins still apply. Stop it with Ctrl + C when you are done.
+- Test it from PowerShell (reads node-01's key from `device_keys.local.env`, written by `tools/register_device.py`):
+
+  ```powershell
+  $url  = "https://<random-words>.trycloudflare.com"
+  $key  = (Select-String -Path device_keys.local.env -Pattern '^DEVICE_KEY_NODE_01=(.+)$').Matches[0].Groups[1].Value
+  $body = @{ device_id = "node-01"; ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); temp_c = 18.5; rh = 72.0 } | ConvertTo-Json -Compress
+  $body | curl.exe -s -X POST "$url/readings" -H "Content-Type: application/json" -H "X-Device-Key: $key" --data-binary "@-"
+  ```
+
+  A good answer is `{"stored":1,"skipped":0,"rejected":[],"risk_level":"unknown"}`. (The body is piped in because Windows PowerShell 5.1 strips the double quotes out of a JSON string passed to `curl.exe -d`.)
+- **The tunnel needs outbound port 7844** (QUIC or TCP) to reach Cloudflare. Some networks block it, including the mobile hotspot and the Strathmore student Wi-Fi this project was developed on: the log then shows `Allow outbound TCP on port 7844` and `dial tcp …:7844: i/o timeout`.
+- **Fallback when 7844 is blocked: localhost.run over SSH** (port 22). It needs no install (Windows has `ssh`) and no account:
+
+  ```powershell
+  ssh -o ServerAliveInterval=30 -R 80:127.0.0.1:8000 nokey@localhost.run    # prints https://<random>.lhr.life
+  ```
+
+  Write `127.0.0.1`, not `localhost`: on Windows `localhost` can resolve to IPv6 `::1`, where uvicorn is not listening, and every request then answers `no tunnel`. The free URL is random and short-lived like Cloudflare's; the same `$url` test above works with it.
+
 ## Tests and evaluations
 
 ```powershell
@@ -169,7 +202,7 @@ docs/      evaluation outputs (tables/figures) for Chapter 5
 10 tables; string IDs with prefixes (e.g. `FRM-xxxx`, `RD-xxxx`).
 
 - **farmers**(farmer_id PK, name, phone_number UNIQUE, password_hash, role ['farmer'|'admin'], farm_id, created_at)
-- **sensor_nodes**(node_id PK, farmer_id FK, location, latitude, longitude, last_sync_time)
+- **sensor_nodes**(node_id PK, farmer_id FK, location, latitude, longitude, last_sync_time, api_key_hash, last_risk_level, created_at): the sensor devices
 - **sensor_readings**(reading_id PK, node_id FK, temperature, humidity, leaf_wetness NULLABLE, timestamp; UNIQUE(node_id, timestamp))
 - **weather_readings**(weather_id PK, latitude, longitude, source ['archive'|'historical_forecast'|'forecast'], timestamp, temperature, humidity, forecast_issued_at NULLABLE; UNIQUE(source, latitude, longitude, timestamp, forecast_issued_at))
 - **risk_scores**(score_id PK, node_id FK, method ['hutton'|'learned'], data_source ['sensor'|'api'], horizon_hours [0|24|48], status ['ok'|'insufficient_data'|'no_data'], score FLOAT 0-1 NULLABLE, valid_hours INT NULL, hutton_day BOOL NULL, hutton_period BOOL NULL, model_version NULL, for_date DATE, computed_at)
@@ -233,8 +266,10 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 
 ## Sensor ingest (FR ii)
 
-- `POST /nodes/{node_id}/readings` takes a **batch** (max 500) and authenticates with the node's own `X-Node-Key` header, never a farmer JWT. Replaying a batch is harmless: a duplicate `(node_id, timestamp)` is skipped via `INSERT … ON CONFLICT DO NOTHING` and counted as a duplicate, not an error. Out-of-order and old timestamps are accepted, since the node buffers while offline. Rows are validated one by one (temperature -10…50 °C, humidity 0…100%, timestamp no more than 10 minutes in the future, timezone required) and rejects are reported by position, so one bad reading does not cost the node its buffer. Response: `{"accepted": n, "duplicates": n, "rejected": [{"index": i, "reason": "…"}]}`. `last_sync_time` records when the node was last heard from, not the newest reading.
+- `POST /nodes/{node_id}/readings` takes a **batch** (max 500) and authenticates with the node's own `X-Node-Key` header, never a farmer JWT. Replaying a batch is harmless: a duplicate `(node_id, timestamp)` is skipped via `INSERT … ON CONFLICT DO NOTHING` and counted as a duplicate, not an error. Out-of-order and old timestamps are accepted, since the node buffers while offline. Rows are validated one by one (temperature -40…85 °C, the SHT31's own range; humidity 0…100%; timestamp no more than 5 minutes in the future, timezone required) and rejects are reported by position, so one bad reading does not cost the node its buffer. Response: `{"accepted": n, "duplicates": n, "rejected": [{"index": i, "reason": "…"}]}`. `last_sync_time` records when the node was last heard from (last seen), not the newest reading; `created_at` when it was registered.
+- `POST /readings` is the same ingest in a flatter shape for the ESP32: `X-Device-Key`, a body of one reading or a list, each `{"device_id", "ts", "temp_c", "rh"}` (the device ID is the node ID). Same tables, limits and duplicate handling; the reply is `{"stored", "skipped", "rejected", "risk_level"}`, where `risk_level` comes from `fusion.resolve_risk` (as last scored by the hourly job) and is `unknown` when there is too little history. A node is a "device" here: there is no separate devices table, so the risk layer sees these readings unchanged.
 - `GET /nodes/{node_id}/readings?from=&to=` uses a farmer JWT and the ownership rule; `from` inclusive, `to` exclusive, ordered by time.
+- **Registering a device:** `.\dev.ps1 register-device node-01 "Bench node A" --key-file device_keys.local.env` creates the node (owned by the admin account unless `--owner-phone` names a farmer, at the farm site unless `--latitude/--longitude`), stores only the hash of a fresh 32-byte key, prints the raw key once, and refuses a device_id that already exists. `*.local.env` files are gitignored and blocked by the pre-commit hook.
 - Node keys are random strings stored only as bcrypt hashes. `tools/seed.py` prints a key once when it issues one, including for an existing node that has none (that is how a lost key is replaced).
 - **The full contract for the firmware is in [docs/firmware_contract.md](docs/firmware_contract.md)**: headers, payload, limits, status codes, and the retry/buffer rules the ESP32 must follow.
 

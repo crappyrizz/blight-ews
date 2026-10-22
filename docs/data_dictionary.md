@@ -41,7 +41,9 @@ display. IDs are prefixed strings (`FRM-`, `NODE-`, `RD-`, `WX-`, `RSK-`,
 | latitude | double | decimal degrees, WGS84 | Node position (site: −0.70) | `SITE_LAT` |
 | longitude | double | decimal degrees, WGS84 | Node position (site: 36.60) | `SITE_LON` |
 | last_sync_time | timestamptz NULL | UTC | When the node last uploaded; null if never | `backend/ingest.py` |
-| api_key_hash | text NULL | bcrypt hash | Verifier for the node's `X-Node-Key` | `tools/seed.py` |
+| api_key_hash | text NULL | bcrypt hash | Verifier for the node's `X-Node-Key` / `X-Device-Key` (the raw key is never stored) | `tools/seed.py` |
+| last_risk_level | text NULL | low / medium / high | Last judged risk level, so the high-risk SMS fires only on a change | `backend/alerts.py` |
+| created_at | timestamptz | UTC | When the node was registered | database default |
 
 ### sensor_readings — **simulated until the node is deployed**
 

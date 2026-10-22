@@ -100,7 +100,8 @@ class SensorNodeOut(BaseModel):
     location: str
     latitude: float
     longitude: float
-    last_sync_time: datetime | None
+    last_sync_time: datetime | None  # last seen
+    created_at: datetime
 
 
 # --- sensor ingest -----------------------------------------------------
@@ -108,11 +109,30 @@ class SensorNodeOut(BaseModel):
 # Changing one changes what the ESP32 is allowed to send.
 
 MAX_BATCH_SIZE = 500
-FUTURE_TOLERANCE_MINUTES = 10  # allows for a little clock drift on the node
-MIN_TEMPERATURE_C = -10.0
-MAX_TEMPERATURE_C = 50.0
+FUTURE_TOLERANCE_MINUTES = 5  # allows for a little clock drift on the node
+# The SHT31's own operating range: a value outside it cannot be a real reading.
+MIN_TEMPERATURE_C = -40.0
+MAX_TEMPERATURE_C = 85.0
 MIN_HUMIDITY_PCT = 0.0
 MAX_HUMIDITY_PCT = 100.0
+
+
+def check_reading_time(value: datetime) -> datetime:
+    """A reading's time must carry a timezone and not be in the future. Returns it in UTC."""
+    if value.tzinfo is None:
+        # A time with no zone is ambiguous, and this project's whole daily
+        # aggregation depends on knowing the instant exactly.
+        raise ValueError("timestamp must include a timezone, e.g. 2026-09-22T03:00:00Z")
+
+    limit = datetime.now(UTC) + timedelta(minutes=FUTURE_TOLERANCE_MINUTES)
+    if value > limit:
+        raise ValueError(
+            f"timestamp is more than {FUTURE_TOLERANCE_MINUTES} minutes in the future; "
+            "check the node's clock"
+        )
+    # Old timestamps are fine: the node buffers readings while offline and
+    # flushes them when the network returns.
+    return value.astimezone(UTC)
 
 
 class ReadingIn(BaseModel):
@@ -132,20 +152,7 @@ class ReadingIn(BaseModel):
     @field_validator("timestamp")
     @classmethod
     def _must_be_utc_and_not_future(cls, value: datetime) -> datetime:
-        if value.tzinfo is None:
-            # A time with no zone is ambiguous, and this project's whole daily
-            # aggregation depends on knowing the instant exactly.
-            raise ValueError("timestamp must include a timezone, e.g. 2026-09-22T03:00:00Z")
-
-        limit = datetime.now(UTC) + timedelta(minutes=FUTURE_TOLERANCE_MINUTES)
-        if value > limit:
-            raise ValueError(
-                f"timestamp is more than {FUTURE_TOLERANCE_MINUTES} minutes in the future; "
-                "check the node's clock"
-            )
-        # Old timestamps are fine: the node buffers readings while offline and
-        # flushes them when the network returns.
-        return value.astimezone(UTC)
+        return check_reading_time(value)
 
 
 class ReadingBatch(BaseModel):
@@ -168,6 +175,37 @@ class IngestResult(BaseModel):
     accepted: int
     duplicates: int
     rejected: list[RejectedReading]
+
+
+class DeviceReadingIn(BaseModel):
+    """One reading in the POST /readings shape: the device names itself in every row.
+
+    Same limits as ReadingIn; only the field names differ.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    device_id: str = Field(min_length=1, max_length=32)
+    ts: datetime
+    temp_c: float = Field(ge=MIN_TEMPERATURE_C, le=MAX_TEMPERATURE_C)
+    rh: float = Field(ge=MIN_HUMIDITY_PCT, le=MAX_HUMIDITY_PCT)
+
+    @field_validator("ts")
+    @classmethod
+    def _must_be_utc_and_not_future(cls, value: datetime) -> datetime:
+        return check_reading_time(value)
+
+    def as_reading(self) -> ReadingIn:
+        """The same reading in the stored shape (already validated, so not re-checked)."""
+        return ReadingIn.model_construct(timestamp=self.ts, temperature=self.temp_c,
+                                         humidity=self.rh, leaf_wetness=None)
+
+
+class DeviceIngestResult(BaseModel):
+    stored: int
+    skipped: int  # duplicates: already stored, or repeated in this request
+    rejected: list[RejectedReading]
+    risk_level: str  # 'low' | 'medium' | 'high' | 'unknown'
 
 
 class ReadingOut(BaseModel):

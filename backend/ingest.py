@@ -12,17 +12,30 @@ buffers readings locally and flushes them when it next gets a connection, so:
 One bad reading also must not cost the node the whole buffer, so each row is
 validated on its own and rejects are reported back by position.
 
+Two request shapes reach the same tables and the same rules:
+
+- POST /nodes/{node_id}/readings (X-Node-Key): {"readings": [{timestamp, temperature, humidity}]}
+- POST /readings (X-Device-Key): one reading or a list of them, each naming
+  its device: {device_id, ts, temp_c, rh}. Its reply also carries the
+  device's current risk level, so the node can show it (e.g. on an LED).
+
 The full contract is written up in docs/firmware_contract.md.
 """
 from datetime import UTC, datetime
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from backend import ids
+from backend import fusion, hutton, ids
 from backend.models import SensorNode, SensorReading
-from backend.schemas import IngestResult, ReadingIn, RejectedReading
+from backend.schemas import (
+    DeviceIngestResult,
+    DeviceReadingIn,
+    IngestResult,
+    ReadingIn,
+    RejectedReading,
+)
 
 # The unique constraint that makes a replayed batch harmless.
 READING_CONFLICT = "uq_sensor_readings_node_timestamp"
@@ -36,9 +49,11 @@ def _first_error(error: ValidationError) -> str:
     return f"{field}: {message}"
 
 
-def validate_readings(raw_readings: list) -> tuple[list[ReadingIn], list[RejectedReading]]:
-    """Validate each row on its own, keeping the node's original positions."""
-    valid: list[ReadingIn] = []
+def validate_readings(
+    raw_readings: list, shape: type[BaseModel] = ReadingIn
+) -> tuple[list, list[RejectedReading]]:
+    """Validate each row on its own (as `shape`), keeping the node's original positions."""
+    valid = []
     rejected: list[RejectedReading] = []
 
     for index, raw in enumerate(raw_readings):
@@ -46,7 +61,7 @@ def validate_readings(raw_readings: list) -> tuple[list[ReadingIn], list[Rejecte
             rejected.append(RejectedReading(index=index, reason="reading must be an object"))
             continue
         try:
-            valid.append(ReadingIn(**raw))
+            valid.append(shape(**raw))
         except ValidationError as error:
             rejected.append(RejectedReading(index=index, reason=_first_error(error)))
 
@@ -113,3 +128,51 @@ def ingest_batch(session: Session, node: SensorNode, raw_readings: list) -> Inge
 
     session.commit()
     return IngestResult(accepted=accepted, duplicates=duplicates, rejected=rejected)
+
+
+# --- POST /readings: the device names itself in each reading ---------------------------
+
+
+def device_of(raw_readings: list) -> str:
+    """The one device_id the readings in a request name. ValueError if there is not exactly one.
+
+    A key belongs to one device, so one request carries one device's readings.
+    A row without a device_id is not counted here; it is rejected on its own later.
+    """
+    if not raw_readings:
+        raise ValueError("send at least one reading")
+    names = {row.get("device_id") for row in raw_readings if isinstance(row, dict)}
+    names = {name for name in names if isinstance(name, str) and name}
+    if not names:
+        raise ValueError("every reading needs a device_id")
+    if len(names) > 1:
+        raise ValueError("one request may carry readings from one device only")
+    return names.pop()
+
+
+def current_risk_level(session: Session, node: SensorNode) -> str:
+    """The node's risk level today from the risk layer, or 'unknown' with too little history.
+
+    The same risk fusion and the dashboard use (fusion.resolve_risk), as last
+    scored by the hourly risk job. When there is no judged score to rest on,
+    resolve_risk falls back to a neutral prior, which here is reported as
+    'unknown', never as a level.
+    """
+    today = datetime.now(hutton.LOCAL_TZ).date()
+    risk = fusion.resolve_risk(session, node.node_id, today)
+    if risk.basis == fusion.BASIS_NEUTRAL_PRIOR:
+        return "unknown"
+    return fusion.risk_level(risk.score)
+
+
+def ingest_device_batch(session: Session, node: SensorNode, raw_readings: list) -> DeviceIngestResult:
+    """Validate and store a POST /readings request, record the contact, and report the risk."""
+    # device_of() already made sure every named device is this one; a row with
+    # no device_id fails validation here and is rejected by position.
+    valid, rejected = validate_readings(raw_readings, DeviceReadingIn)
+    stored, skipped = store_readings(session, node, [reading.as_reading() for reading in valid])
+
+    node.last_sync_time = datetime.now(UTC)  # last seen: this contact, not the newest reading
+    session.commit()
+    return DeviceIngestResult(stored=stored, skipped=skipped, rejected=rejected,
+                              risk_level=current_risk_level(session, node))

@@ -19,6 +19,8 @@ htmlcov/
 # --- Secrets / config ---
 .env
 .env.*
+# Raw device keys written by tools/register_device.py --key-file
+*.local.env
 !.env.example
 
 # --- Data (raw weather, images, uploads) ---

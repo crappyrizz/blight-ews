@@ -175,12 +175,20 @@ def get_current_node(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing X-Node-Key header",
         )
+    return node_for_key(db, node_id, x_node_key)
 
+
+def node_for_key(db: Session, node_id: str, key: str, label: str = "node") -> SensorNode:
+    """The node, if `key` matches its stored hash; otherwise 401.
+
+    An unknown node and a wrong key give the same answer, so the endpoint
+    cannot be used to find out which node IDs exist.
+    """
     node = db.get(SensorNode, node_id)
-    if node is None or not node.api_key_hash or not verify_node_key(x_node_key, node.api_key_hash):
+    if node is None or not node.api_key_hash or not verify_node_key(key, node.api_key_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid node credentials",
+            detail=f"Invalid {label} credentials",
         )
     return node
 

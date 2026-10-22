@@ -81,6 +81,7 @@ class SensorNode(Base):
     # high-risk SMS goes out only when the level CHANGES to high. Null until
     # the first judged level; an unknown day never changes it.
     last_risk_level: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class SensorReading(Base):
