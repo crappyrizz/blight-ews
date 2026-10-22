@@ -106,7 +106,14 @@ cloudflared tunnel --url http://127.0.0.1:8000            # window 2: prints htt
   ```
 
   A good answer is `{"stored":1,"skipped":0,"rejected":[],"risk_level":"unknown"}`. (The body is piped in because Windows PowerShell 5.1 strips the double quotes out of a JSON string passed to `curl.exe -d`.)
-- **The tunnel needs outbound port 7844** (QUIC or TCP) to reach Cloudflare. Some networks, including mobile hotspots, block it: the log then shows `Allow outbound TCP on port 7844` and `dial tcp …:7844: i/o timeout`. Use another network (home or campus Wi-Fi), or a hosted deployment.
+- **The tunnel needs outbound port 7844** (QUIC or TCP) to reach Cloudflare. Some networks block it, including the mobile hotspot and the Strathmore student Wi-Fi this project was developed on: the log then shows `Allow outbound TCP on port 7844` and `dial tcp …:7844: i/o timeout`.
+- **Fallback when 7844 is blocked: localhost.run over SSH** (port 22). It needs no install (Windows has `ssh`) and no account:
+
+  ```powershell
+  ssh -o ServerAliveInterval=30 -R 80:127.0.0.1:8000 nokey@localhost.run    # prints https://<random>.lhr.life
+  ```
+
+  Write `127.0.0.1`, not `localhost`: on Windows `localhost` can resolve to IPv6 `::1`, where uvicorn is not listening, and every request then answers `no tunnel`. The free URL is random and short-lived like Cloudflare's; the same `$url` test above works with it.
 
 ## Tests and evaluations
 
