@@ -156,7 +156,13 @@ void main() {
     });
   });
 
-  test('the report date can never be in the future', () {
+  test('by default the app talks to the hosted server over HTTPS', () {
+    // A plain build must reach the Render deployment from any network; a PC
+    // address is only ever passed in with --dart-define.
+    expect(apiBaseUrl, 'https://blight-ews-api.onrender.com');
+  });
+
+    test('the report date can never be in the future', () {
     final today = todayDate();
     final now = DateTime.now();
     expect(today, DateTime(now.year, now.month, now.day));
