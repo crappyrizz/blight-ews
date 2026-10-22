@@ -117,19 +117,21 @@ cloudflared tunnel --url http://127.0.0.1:8000            # window 2: prints htt
 
 ## Deployment (Render + Neon)
 
-The demo server: the API as a free **Render** web service ([render.yaml](render.yaml)), the database as a free **Neon** Postgres (Render's free Postgres is deleted after 30 days; Neon's has no expiry). Both in Frankfurt. Devices and the app reach it at `https://<service>.onrender.com` over ordinary HTTPS (port 443), from any network.
+The demo server: the API as a free **Render** web service ([render.yaml](render.yaml)), the database as a free **Neon** Postgres (Render's free Postgres is deleted after 30 days; Neon's has no expiry). Both in Frankfurt. Devices and the app reach it at **https://blight-ews-api.onrender.com** over ordinary HTTPS (port 443), from any network.
 
 **One-time setup**
 
-1. **Neon** ([neon.com](https://neon.com)): create a project in *AWS Europe Central 1 (Frankfurt)*, Postgres 17. Copy the **direct** connection string (turn *Connection pooling* off: the backend sets the session timezone at connect time, which the pooled endpoint rejects) into `neon.local.env` in the repo root as `DATABASE_URL=postgresql://...`. `*.local.env` is gitignored.
+1. **Neon** ([neon.com](https://neon.com)): create a project in *AWS Europe Central 1 (Frankfurt)*, Postgres 18 (the same major version as the local database, so `pg_dump` output loads as it is). Copy the **direct** connection string (turn *Connection pooling* off: the backend sets the session timezone at connect time, which the pooled endpoint rejects) into `neon.local.env` in the repo root as `DATABASE_URL=postgresql://...`. `*.local.env` is gitignored.
 2. **Schema and data**: create the tables on Neon, then copy every table across, so logins, node keys and the weather archive carry over:
 
    ```powershell
    $neon = (Select-String neon.local.env -Pattern '^DATABASE_URL=(.+)$').Matches[0].Groups[1].Value
    $env:DATABASE_URL = $neon; .\.venv\Scripts\alembic.exe upgrade head; Remove-Item Env:DATABASE_URL
    $pg = "C:\Program Files\PostgreSQL\18\bin"
-   & "$pg\pg_dump.exe" --data-only --no-owner --no-privileges --exclude-table=alembic_version "postgresql://blight:<password>@localhost:5432/blight_ews" | & "$pg\psql.exe" -v ON_ERROR_STOP=1 $neon
+   & "$pg\pg_dump.exe" --data-only --no-owner --no-privileges --exclude-table=alembic_version "postgresql://blight:<password>@localhost:5432/blight_ews" | & "$pg\psql.exe" -v ON_ERROR_STOP=1 --single-transaction $neon
    ```
+
+   This needs outbound port 5432, which the student Wi-Fi blocks (the mobile hotspot allows it). If Render has already deployed, its start command has created the tables, so skip the `alembic` line. The local and hosted databases are separate from then on: readings sent to one do not appear in the other.
 3. **Render** ([render.com](https://render.com), sign in with GitHub): *New → Blueprint*, pick this repository; Render reads `render.yaml`. When asked, paste the Neon connection string into `DATABASE_URL` and the Africa's Talking sandbox key into `AT_API_KEY`. `JWT_SECRET` is generated. The build installs the requirements and downloads the models (`tools/fetch_models.py`, from the GitHub release `models-2026-10-12`, checked against `models/models.sha256`); the start command applies migrations and starts uvicorn.
 
 After that, every merge to `main` redeploys.
