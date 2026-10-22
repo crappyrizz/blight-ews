@@ -8,7 +8,19 @@ import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -20,6 +32,7 @@ from backend.models import Farmer, LeafImage, SensorNode, SensorReading, Symptom
 from backend.schemas import (
     MAX_BATCH_SIZE,
     AlertOut,
+    DeviceIngestResult,
     DiagnosisOut,
     FarmerLogin,
     FarmerOut,
@@ -185,6 +198,36 @@ def post_readings(
             detail=f"A batch may contain at most {MAX_BATCH_SIZE} readings",
         )
     return ingest.ingest_batch(db, node, batch.readings)
+
+
+@app.post("/readings", response_model=DeviceIngestResult)
+def post_device_readings(
+    body: dict | list = Body(...),
+    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    db: Session = Depends(get_db),
+):
+    """Readings from an ESP32 node: one reading, or a list of buffered ones (X-Device-Key).
+
+    Each reading is {"device_id", "ts", "temp_c", "rh"}. The key is checked
+    against the stored hash of the device the readings name (401 if wrong or
+    missing). Duplicates are skipped and counted; a bad row is rejected on its
+    own while the rest are stored. The reply carries the device's current risk
+    level, or "unknown" while there is too little history.
+    """
+    if not x_device_key:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing X-Device-Key header")
+    raw_readings = body if isinstance(body, list) else [body]
+    if len(raw_readings) > MAX_BATCH_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"A request may contain at most {MAX_BATCH_SIZE} readings",
+        )
+    try:
+        device_id = ingest.device_of(raw_readings)
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+    node = auth.node_for_key(db, device_id, x_device_key, label="device")
+    return ingest.ingest_device_batch(db, node, raw_readings)
 
 
 @app.get("/nodes/{node_id}/readings", response_model=list[ReadingOut])

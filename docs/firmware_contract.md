@@ -54,7 +54,7 @@ only replaced. Keep it out of any source file that goes into version control.
 | Field | Type | Rules |
 |---|---|---|
 | `timestamp` | string | ISO 8601 **with a timezone**. Send UTC with a trailing `Z`. A time with no zone is rejected |
-| `temperature` | number | °C, between **-10 and 50** inclusive |
+| `temperature` | number | °C, between **-40 and 85** inclusive (the SHT31's own range) |
 | `humidity` | number | % relative humidity, between **0 and 100** inclusive |
 | `leaf_wetness` | number or `null` | Optional. Send `null` (or leave the field out) when no leaf-wetness sensor is fitted |
 
@@ -67,7 +67,7 @@ Rules that matter:
 - **Any order is fine.** The server sorts by timestamp; no need to sort first.
 - **Old readings are fine.** There is no lower limit on age, so a week-old
   backlog uploads normally.
-- **A timestamp more than 10 minutes in the future is rejected.** That
+- **A timestamp more than 5 minutes in the future is rejected.** That
   tolerance exists for clock drift, not for a wrong clock: see §7.
 
 ---
@@ -77,7 +77,7 @@ Rules that matter:
 `200 OK` with:
 
 ```json
-{"accepted": 18, "duplicates": 6, "rejected": [{"index": 4, "reason": "temperature: Input should be less than or equal to 50"}]}
+{"accepted": 18, "duplicates": 6, "rejected": [{"index": 4, "reason": "temperature: Input should be less than or equal to 85"}]}
 ```
 
 | Field | Meaning |
@@ -92,6 +92,54 @@ buffer. A rejected row will never be accepted on a retry, because it is the
 data that is wrong, so retrying it forever would block the buffer.
 
 Log rejections if you can. They mean a firmware or sensor fault.
+
+---
+
+## 4a. The simpler endpoint: `POST /readings`
+
+The same tables, rules and limits, in a flatter shape that is easier to build
+on an ESP32. Either endpoint may be used; readings from both are the same
+readings (sending one through each is a duplicate, not two rows).
+
+```
+POST /readings
+X-Device-Key: <the node's key>
+Content-Type: application/json
+```
+
+The body is **one reading, or a list** of buffered readings. Every reading
+names its device (the node ID, e.g. `NODE-E30CEA4721CE`):
+
+```json
+[
+  {"device_id": "NODE-E30CEA4721CE", "ts": "2026-09-22T03:00:00Z", "temp_c": 12.4, "rh": 93.1},
+  {"device_id": "NODE-E30CEA4721CE", "ts": "2026-09-22T04:00:00Z", "temp_c": 12.1, "rh": 95.0}
+]
+```
+
+| Field | Rules |
+|---|---|
+| `device_id` | The node's ID. One request carries one device's readings (otherwise `422`) |
+| `ts` | ISO 8601 with a timezone (send UTC with `Z`); at most 5 minutes in the future |
+| `temp_c` | °C, -40 to 85 |
+| `rh` | % relative humidity, 0 to 100 |
+
+The key is checked against the stored hash of the device the readings name:
+a missing key, a wrong key or an unknown device all give `401`. An empty
+request gives `422`; more than 500 readings give `413`.
+
+Response, `200 OK`:
+
+```json
+{"stored": 18, "skipped": 6, "rejected": [{"index": 4, "reason": "temp_c: Input should be less than or equal to 85"}], "risk_level": "medium"}
+```
+
+`stored`, `skipped` (duplicates) and `rejected` mean exactly what `accepted`,
+`duplicates` and `rejected` mean in §4, and a 200 again means every row in the
+request is done with. `risk_level` is the plot's current blight risk from the
+risk layer (`low`, `medium`, `high`), as last scored by the hourly risk job,
+or `unknown` while there is too little history to judge. A node can show it,
+e.g. on an LED.
 
 ---
 

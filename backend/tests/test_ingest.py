@@ -168,7 +168,7 @@ def test_same_timestamp_from_another_node_is_not_a_duplicate(client, db_session,
 def test_invalid_rows_are_rejected_individually(client, db_session, node):
     response = post(client, node, [
         reading(0),  # ok
-        reading(1, temperature=60.0),  # too hot
+        reading(1, temperature=90.0),  # beyond the SHT31's range
         reading(2, humidity=150.0),  # impossible humidity
         {"timestamp": reading(3)["timestamp"], "humidity": 90.0},  # no temperature
         reading(4),  # ok
@@ -183,7 +183,7 @@ def test_invalid_rows_are_rejected_individually(client, db_session, node):
     assert len(stored_timestamps(db_session, node)) == 2
 
 
-@pytest.mark.parametrize("temperature", [-10.1, 50.1])
+@pytest.mark.parametrize("temperature", [-40.1, 85.1])
 def test_temperature_outside_the_allowed_range_is_rejected(client, node, temperature):
     response = post(client, node, [reading(0, temperature=temperature)])
 
@@ -191,7 +191,7 @@ def test_temperature_outside_the_allowed_range_is_rejected(client, node, tempera
     assert "temperature" in response.json()["rejected"][0]["reason"]
 
 
-@pytest.mark.parametrize("temperature", [-10.0, 50.0])
+@pytest.mark.parametrize("temperature", [-40.0, 85.0])
 def test_range_limits_themselves_are_allowed(client, node, temperature):
     assert post(client, node, [reading(0, temperature=temperature)]).json()["accepted"] == 1
 
@@ -206,8 +206,8 @@ def test_future_timestamp_is_rejected(client, node):
 
 
 def test_small_clock_drift_is_tolerated(client, node):
-    """Up to 10 minutes ahead is allowed, so a slightly fast node still works."""
-    soon = (datetime.now(UTC) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+    """Up to 5 minutes ahead is allowed, so a slightly fast node still works."""
+    soon = (datetime.now(UTC) + timedelta(minutes=4)).isoformat().replace("+00:00", "Z")
 
     response = post(client, node, [{"timestamp": soon, "temperature": 12.0, "humidity": 90.0}])
 
