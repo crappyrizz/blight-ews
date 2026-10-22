@@ -17,6 +17,8 @@ from backend.models import Base
 
 # Safety check: the session fixture DROPS every table, so it must never point
 # at the real database.
+if not settings.TEST_DATABASE_URL:
+    raise RuntimeError("Set TEST_DATABASE_URL (a separate database the tests may wipe) in .env")
 if settings.TEST_DATABASE_URL == settings.DATABASE_URL:
     raise RuntimeError("TEST_DATABASE_URL must be different from DATABASE_URL")
 

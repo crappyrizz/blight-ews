@@ -1,0 +1,33 @@
+# Render Blueprint: the FastAPI backend as a free web service.
+# The database is NOT here: it is a free Neon Postgres (no 30-day expiry),
+# whose connection string is pasted into DATABASE_URL in the Render dashboard.
+# Setup steps and trade-offs: README, "Deployment (Render + Neon)".
+services:
+  - type: web
+    name: blight-ews-api
+    runtime: python
+    plan: free
+    region: frankfurt          # same region as the Neon database
+    branch: main
+    autoDeploy: true           # every merge to main redeploys
+    buildCommand: pip install -r requirements.txt && python -m tools.fetch_models
+    # Migrations first, so the schema always matches the code being started.
+    startCommand: alembic upgrade head && uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Secrets: entered once in the dashboard, never stored in git.
+      - key: DATABASE_URL
+        sync: false            # Neon's DIRECT (not pooled) connection string
+      - key: AT_API_KEY
+        sync: false            # Africa's Talking sandbox key
+      - key: JWT_SECRET
+        generateValue: true    # Render makes a random one
+      # Plain settings.
+      - key: JWT_EXPIRE_MINUTES
+        value: "60"
+      - key: AT_USERNAME
+        value: sandbox
+      - key: SMS_DRY_RUN
+        value: "true"          # set to false in the dashboard to send sandbox SMS
