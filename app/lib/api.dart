@@ -32,6 +32,7 @@ const String apiBaseUrl = String.fromEnvironment(
 const Duration _timeout = Duration(seconds: 75);
 const Duration _uploadTimeout = Duration(seconds: 90); // photos on a weak network
 const String _tokenKey = 'access_token';
+const String _nodeKey = 'selected_node'; // the sensor the farmer last chose
 
 /// A problem the app should show to the user, already in plain words.
 class ApiException implements Exception {
@@ -59,7 +60,15 @@ class Api {
 
   Future<bool> isLoggedIn() async => (await token()) != null;
 
-  Future<void> logout() => _storage.delete(key: _tokenKey);
+  Future<void> logout() async {
+    await _storage.delete(key: _tokenKey);
+    await _storage.delete(key: _nodeKey); // the next account may have other sensors
+  }
+
+  /// The sensor the farmer last picked, so the app reopens on it.
+  Future<String?> rememberedNodeId() => _storage.read(key: _nodeKey);
+
+  Future<void> rememberNode(String nodeId) => _storage.write(key: _nodeKey, value: nodeId);
 
   // --- accounts and the plot ---------------------------------------------------
 

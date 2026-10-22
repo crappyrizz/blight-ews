@@ -30,6 +30,13 @@ class SensorNode {
       SensorNode(nodeId: j['node_id'] as String, location: (j['location'] as String?) ?? 'My plot');
 }
 
+/// The sensor to open on: the one the farmer last chose if it is still theirs, else the first.
+SensorNode pickNode(List<SensorNode> nodes, String? rememberedId) =>
+    nodes.firstWhere((n) => n.nodeId == rememberedId, orElse: () => nodes.first);
+
+/// How a sensor is named in the picker: its place, then its ID.
+String nodeLabel(SensorNode node) => '${node.location} (${node.nodeId})';
+
 /// low / medium / high, or unknown when there is no recent judged data.
 enum RiskLevel { low, medium, high, unknown }
 

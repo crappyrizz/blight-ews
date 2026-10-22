@@ -90,35 +90,48 @@ def score_learned(session: Session, node_id: str, data_source: str, days: list[d
     return judged
 
 
+def learned_model_available() -> bool:
+    try:
+        risk_model.load_models()
+        return True
+    except FileNotFoundError as error:
+        log.warning("Learned model skipped: %s", error)
+        return False
+
+
+def score_node(session: Session, node: SensorNode, today: date, learned_available: bool) -> list[dict]:
+    """Score one node (both sources, today and the lookback days), then run the SMS policy.
+
+    Used by the hourly job for every node, and by the admin re-score endpoint
+    for one node on demand. Commits, so a later failure keeps this node's scores.
+    """
+    days = [today - timedelta(days=n) for n in range(LOOKBACK_DAYS, -1, -1)]
+    summary = []
+    for source in DATA_SOURCES:
+        daily = hutton.compute_hutton_for_node(node.node_id, days[0], days[-1], source, session=session)
+        learned_judged = (
+            score_learned(session, node.node_id, source, days) if learned_available else None
+        )
+        summary.append({
+            "node_id": node.node_id,
+            "data_source": source,
+            "hutton": {str(d): row["status"] for d, row in daily.iterrows()},
+            "learned_days_judged": learned_judged,
+        })
+    # The high-risk SMS policy (backend/alerts.py), on the plot's own sensor risk.
+    alert = alerts.check_high_risk(session, node, today)
+    summary[-1]["high_risk_sms"] = None if alert is None else alert.delivery_status
+    session.commit()
+    return summary
+
+
 def run_once(session: Session, today: date | None = None) -> list[dict]:
     """One pass over every node. Returns a short summary per node and source."""
     today = today or local_today()
-    days = [today - timedelta(days=n) for n in range(LOOKBACK_DAYS, -1, -1)]
-
-    try:
-        risk_model.load_models()
-        learned_available = True
-    except FileNotFoundError as error:
-        log.warning("Learned model skipped: %s", error)
-        learned_available = False
-
+    learned_available = learned_model_available()
     summary = []
     for node in session.scalars(select(SensorNode).order_by(SensorNode.node_id)).all():
-        for source in DATA_SOURCES:
-            daily = hutton.compute_hutton_for_node(node.node_id, days[0], days[-1], source, session=session)
-            learned_judged = (
-                score_learned(session, node.node_id, source, days) if learned_available else None
-            )
-            summary.append({
-                "node_id": node.node_id,
-                "data_source": source,
-                "hutton": {str(d): row["status"] for d, row in daily.iterrows()},
-                "learned_days_judged": learned_judged,
-            })
-        # The high-risk SMS policy (backend/alerts.py), on the plot's own sensor risk.
-        alert = alerts.check_high_risk(session, node, today)
-        summary[-1]["high_risk_sms"] = None if alert is None else alert.delivery_status
-        session.commit()  # one node at a time: a failure later keeps this node's scores
+        summary += score_node(session, node, today, learned_available)
     return summary
 
 

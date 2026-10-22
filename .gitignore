@@ -67,3 +67,8 @@ app/ios/Flutter/flutter_export_environment.sh
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Agent tooling installed by the Neon CLI (npx neon skills): local to this PC
+.claude/skills/
+skills-lock.json
+.mcp.json
