@@ -6,13 +6,14 @@ from backend.config import settings
 
 # pool_pre_ping checks a pooled connection is still alive before using it,
 # so a Postgres restart does not break the app.
-# connect_timeout makes a request fail after 5 s if Postgres is down, instead
-# of hanging for minutes (the Windows default).
+# connect_timeout makes a request fail after 10 s if Postgres is down, instead
+# of hanging for minutes (the Windows default). 10 s leaves room for a hosted
+# database (Neon) waking from its idle pause.
 engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
     connect_args={
-        "connect_timeout": 5,
+        "connect_timeout": 10,
         # Postgres renders timestamptz in the session's timezone, and this
         # server's is Africa/Nairobi. Pinning the session to UTC means rows
         # read back as UTC, as the rest of the project assumes; conversion to

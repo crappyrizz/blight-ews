@@ -1,0 +1,5 @@
+# SHA-256 of the model files published as assets of the GitHub release named in tools/fetch_models.py.
+# Checked on every download, so the server only ever loads these exact models.
+16fead7bd4daf887ba7cdd6d6095b875b809917b5d2fe6a4f6fc6d1408ad3c10  cnn.tflite
+509549ea47ea98145cc65a00a0a16e635a2023afbf5eb7ccd4bd4e6e1e833b6c  risk_model_24h.joblib
+0ec5414ad259f1221678b97031bb0e5484ca5e66bbf599988bb0e6747b5c13c3  risk_model_48h.joblib

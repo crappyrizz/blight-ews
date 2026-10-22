@@ -18,3 +18,17 @@ def test_site_defaults(monkeypatch):
     assert s.SITE_LAT == -0.70
     assert s.SITE_LON == 36.60
     assert s.TIMEZONE == "Africa/Nairobi"
+
+
+def test_plain_postgres_urls_get_the_psycopg_driver():
+    for given in ("postgres://u:p@host/db?sslmode=require", "postgresql://u:p@host/db?sslmode=require"):
+        s = Settings(_env_file=None, **{**REQUIRED, "DATABASE_URL": given})
+        assert s.DATABASE_URL == "postgresql+psycopg://u:p@host/db?sslmode=require"
+    s = Settings(_env_file=None, **REQUIRED)
+    assert s.DATABASE_URL == REQUIRED["DATABASE_URL"]  # already right: unchanged
+
+
+def test_a_server_may_leave_the_test_database_unset(monkeypatch):
+    monkeypatch.delenv("TEST_DATABASE_URL", raising=False)
+    required = {k: v for k, v in REQUIRED.items() if k != "TEST_DATABASE_URL"}
+    assert Settings(_env_file=None, **required).TEST_DATABASE_URL == ""

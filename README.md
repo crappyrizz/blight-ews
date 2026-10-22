@@ -115,6 +115,35 @@ cloudflared tunnel --url http://127.0.0.1:8000            # window 2: prints htt
 
   Write `127.0.0.1`, not `localhost`: on Windows `localhost` can resolve to IPv6 `::1`, where uvicorn is not listening, and every request then answers `no tunnel`. The free URL is random and short-lived like Cloudflare's; the same `$url` test above works with it.
 
+## Deployment (Render + Neon)
+
+The demo server: the API as a free **Render** web service ([render.yaml](render.yaml)), the database as a free **Neon** Postgres (Render's free Postgres is deleted after 30 days; Neon's has no expiry). Both in Frankfurt. Devices and the app reach it at `https://<service>.onrender.com` over ordinary HTTPS (port 443), from any network.
+
+**One-time setup**
+
+1. **Neon** ([neon.com](https://neon.com)): create a project in *AWS Europe Central 1 (Frankfurt)*, Postgres 17. Copy the **direct** connection string (turn *Connection pooling* off: the backend sets the session timezone at connect time, which the pooled endpoint rejects) into `neon.local.env` in the repo root as `DATABASE_URL=postgresql://...`. `*.local.env` is gitignored.
+2. **Schema and data**: create the tables on Neon, then copy every table across, so logins, node keys and the weather archive carry over:
+
+   ```powershell
+   $neon = (Select-String neon.local.env -Pattern '^DATABASE_URL=(.+)$').Matches[0].Groups[1].Value
+   $env:DATABASE_URL = $neon; .\.venv\Scripts\alembic.exe upgrade head; Remove-Item Env:DATABASE_URL
+   $pg = "C:\Program Files\PostgreSQL\18\bin"
+   & "$pg\pg_dump.exe" --data-only --no-owner --no-privileges --exclude-table=alembic_version "postgresql://blight:<password>@localhost:5432/blight_ews" | & "$pg\psql.exe" -v ON_ERROR_STOP=1 $neon
+   ```
+3. **Render** ([render.com](https://render.com), sign in with GitHub): *New → Blueprint*, pick this repository; Render reads `render.yaml`. When asked, paste the Neon connection string into `DATABASE_URL` and the Africa's Talking sandbox key into `AT_API_KEY`. `JWT_SECRET` is generated. The build installs the requirements and downloads the models (`tools/fetch_models.py`, from the GitHub release `models-2026-10-12`, checked against `models/models.sha256`); the start command applies migrations and starts uvicorn.
+
+After that, every merge to `main` redeploys.
+
+**How the free tiers behave, and what that means here**
+
+| | Behaviour | Consequence |
+|---|---|---|
+| Render web service | Sleeps after 15 min without requests; the next request wakes it in about a minute. 750 free hours a month. 512 MB RAM (the app uses about 225 MB). | A device's first upload after a quiet spell waits about a minute: give the ESP32 an HTTP timeout of at least 90 s. The hourly risk job runs at every start-up, so each wake re-scores the risk; while asleep, no job runs and no SMS goes out. |
+| Render filesystem | Lost on every restart and redeploy. | Uploaded leaf photos are not kept; the diagnoses (in the database) are. |
+| Neon Postgres | Pauses after about 5 idle minutes and resumes on the next query. About 100 compute-hours a month at the smallest size. | Uploading **hourly** (the firmware contract's default) keeps both inside the free allowance; a device posting every few minutes would keep Neon awake around the clock and use the month's hours in about two weeks. |
+
+**Updating the models:** retrain, upload the files to a new GitHub release, and put its tag in `tools/fetch_models.py` and the new checksums in `models/models.sha256`.
+
 ## Tests and evaluations
 
 ```powershell
