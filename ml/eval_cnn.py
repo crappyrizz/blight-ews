@@ -269,7 +269,7 @@ def main(argv=None) -> int:
         encoding="utf-8",
     )
     args.out.with_suffix(".json").write_text(
-        json.dumps({"classes": classes, "lab": lab, "field": field}, indent=2), encoding="utf-8"
+        json.dumps({"classes": classes, "lab": lab, "field": field}, indent=2) + "\n", encoding="utf-8"
     )
     print(f"\nWrote {_relative(args.out)} and {_relative(args.out.with_suffix('.json'))}")
     return 0

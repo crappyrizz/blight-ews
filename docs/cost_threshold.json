@@ -1,0 +1,385 @@
+{
+  "pump_loads": [
+    5,
+    10,
+    20
+  ],
+  "prices": [
+    2500.0,
+    3000.0,
+    3500.0,
+    4000.0,
+    4500.0,
+    5000.0
+  ],
+  "headline_prices": [
+    2500.0,
+    3750.0,
+    5000.0
+  ],
+  "assumptions": {
+    "chemical": 2500,
+    "labour_per_load": 50,
+    "bags": 20,
+    "cover_days": 7,
+    "crop_days": 120,
+    "calendar_sprays": 4,
+    "headline_pump_loads": 10
+  },
+  "thresholds": {
+    "5": [
+      {
+        "price": 2500.0,
+        "spray": 2750,
+        "loss": 50000.0,
+        "threshold": 0.055,
+        "threshold_full_loss": 0.052132701421800945
+      },
+      {
+        "price": 3000.0,
+        "spray": 2750,
+        "loss": 60000.0,
+        "threshold": 0.04583333333333333,
+        "threshold_full_loss": 0.043824701195219126
+      },
+      {
+        "price": 3500.0,
+        "spray": 2750,
+        "loss": 70000.0,
+        "threshold": 0.039285714285714285,
+        "threshold_full_loss": 0.037800687285223365
+      },
+      {
+        "price": 4000.0,
+        "spray": 2750,
+        "loss": 80000.0,
+        "threshold": 0.034375,
+        "threshold_full_loss": 0.03323262839879154
+      },
+      {
+        "price": 4500.0,
+        "spray": 2750,
+        "loss": 90000.0,
+        "threshold": 0.030555555555555555,
+        "threshold_full_loss": 0.029649595687331536
+      },
+      {
+        "price": 5000.0,
+        "spray": 2750,
+        "loss": 100000.0,
+        "threshold": 0.0275,
+        "threshold_full_loss": 0.0267639902676399
+      }
+    ],
+    "10": [
+      {
+        "price": 2500.0,
+        "spray": 3000,
+        "loss": 50000.0,
+        "threshold": 0.06,
+        "threshold_full_loss": 0.05660377358490566
+      },
+      {
+        "price": 3000.0,
+        "spray": 3000,
+        "loss": 60000.0,
+        "threshold": 0.05,
+        "threshold_full_loss": 0.047619047619047616
+      },
+      {
+        "price": 3500.0,
+        "spray": 3000,
+        "loss": 70000.0,
+        "threshold": 0.04285714285714286,
+        "threshold_full_loss": 0.0410958904109589
+      },
+      {
+        "price": 4000.0,
+        "spray": 3000,
+        "loss": 80000.0,
+        "threshold": 0.0375,
+        "threshold_full_loss": 0.03614457831325301
+      },
+      {
+        "price": 4500.0,
+        "spray": 3000,
+        "loss": 90000.0,
+        "threshold": 0.03333333333333333,
+        "threshold_full_loss": 0.03225806451612903
+      },
+      {
+        "price": 5000.0,
+        "spray": 3000,
+        "loss": 100000.0,
+        "threshold": 0.03,
+        "threshold_full_loss": 0.02912621359223301
+      }
+    ],
+    "20": [
+      {
+        "price": 2500.0,
+        "spray": 3500,
+        "loss": 50000.0,
+        "threshold": 0.07,
+        "threshold_full_loss": 0.06542056074766354
+      },
+      {
+        "price": 3000.0,
+        "spray": 3500,
+        "loss": 60000.0,
+        "threshold": 0.058333333333333334,
+        "threshold_full_loss": 0.05511811023622047
+      },
+      {
+        "price": 3500.0,
+        "spray": 3500,
+        "loss": 70000.0,
+        "threshold": 0.05,
+        "threshold_full_loss": 0.047619047619047616
+      },
+      {
+        "price": 4000.0,
+        "spray": 3500,
+        "loss": 80000.0,
+        "threshold": 0.04375,
+        "threshold_full_loss": 0.041916167664670656
+      },
+      {
+        "price": 4500.0,
+        "spray": 3500,
+        "loss": 90000.0,
+        "threshold": 0.03888888888888889,
+        "threshold_full_loss": 0.0374331550802139
+      },
+      {
+        "price": 5000.0,
+        "spray": 3500,
+        "loss": 100000.0,
+        "threshold": 0.035,
+        "threshold_full_loss": 0.033816425120772944
+      }
+    ]
+  },
+  "test_year": {
+    "split": {
+      "train": [
+        "2015-01-02",
+        "2024-10-02"
+      ],
+      "val": [
+        "2024-10-05",
+        "2025-10-02"
+      ],
+      "test": [
+        "2025-10-05",
+        "2026-10-04"
+      ]
+    },
+    "model_version": "hgb-48h-20261012-data20150102-20261005",
+    "f1_threshold": 0.27,
+    "days": 365,
+    "period_days": 66,
+    "spells": 22,
+    "unknown_period_days": 0,
+    "no_forecast_days": 0
+  },
+  "headline": {
+    "pump_loads": 10,
+    "spray": 3000,
+    "by_price": {
+      "2500.0": {
+        "threshold": 0.06,
+        "never": {
+          "sprays": 0,
+          "missed": 22,
+          "cost": 1100000.0
+        },
+        "always": {
+          "sprays": 53,
+          "missed": 0,
+          "cost": 159000.0
+        },
+        "calendar": {
+          "sprays": 13,
+          "missed": 22,
+          "cost": 1139000.0
+        },
+        "model_cost": {
+          "sprays": 45,
+          "missed": 0,
+          "cost": 135000.0
+        },
+        "model_f1": {
+          "sprays": 31,
+          "missed": 0,
+          "cost": 93000.0
+        }
+      },
+      "3750.0": {
+        "threshold": 0.04,
+        "never": {
+          "sprays": 0,
+          "missed": 22,
+          "cost": 1650000.0
+        },
+        "always": {
+          "sprays": 53,
+          "missed": 0,
+          "cost": 159000.0
+        },
+        "calendar": {
+          "sprays": 13,
+          "missed": 22,
+          "cost": 1689000.0
+        },
+        "model_cost": {
+          "sprays": 46,
+          "missed": 0,
+          "cost": 138000.0
+        },
+        "model_f1": {
+          "sprays": 31,
+          "missed": 0,
+          "cost": 93000.0
+        }
+      },
+      "5000.0": {
+        "threshold": 0.03,
+        "never": {
+          "sprays": 0,
+          "missed": 22,
+          "cost": 2200000.0
+        },
+        "always": {
+          "sprays": 53,
+          "missed": 0,
+          "cost": 159000.0
+        },
+        "calendar": {
+          "sprays": 13,
+          "missed": 22,
+          "cost": 2239000.0
+        },
+        "model_cost": {
+          "sprays": 49,
+          "missed": 0,
+          "cost": 147000.0
+        },
+        "model_f1": {
+          "sprays": 31,
+          "missed": 0,
+          "cost": 93000.0
+        }
+      }
+    },
+    "threshold_low_price": 0.06,
+    "threshold_high_price": 0.03,
+    "loss_to_spray_low": 16.666666666666668,
+    "loss_to_spray_high": 33.333333333333336,
+    "model_cost_mid": 138000.0,
+    "best_fixed_policy": "always",
+    "best_fixed_cost_mid": 159000.0,
+    "calendar_touched": 4,
+    "calendar_fully_covered": 0,
+    "cheapest_threshold_mid": 0.25,
+    "cheapest_cost_mid": 93000.0,
+    "near_cheapest_from": 0.14,
+    "near_cheapest_to": 0.3,
+    "f1_near_cheapest": true
+  },
+  "by_loads_mid_price": {
+    "5": {
+      "spray": 2750,
+      "threshold": 0.03666666666666667,
+      "policies": {
+        "never": {
+          "sprays": 0,
+          "missed": 22,
+          "cost": 1650000.0
+        },
+        "always": {
+          "sprays": 53,
+          "missed": 0,
+          "cost": 145750.0
+        },
+        "calendar": {
+          "sprays": 13,
+          "missed": 22,
+          "cost": 1685750.0
+        },
+        "model_cost": {
+          "sprays": 47,
+          "missed": 0,
+          "cost": 129250.0
+        },
+        "model_f1": {
+          "sprays": 31,
+          "missed": 0,
+          "cost": 85250.0
+        }
+      }
+    },
+    "10": {
+      "spray": 3000,
+      "threshold": 0.04,
+      "policies": {
+        "never": {
+          "sprays": 0,
+          "missed": 22,
+          "cost": 1650000.0
+        },
+        "always": {
+          "sprays": 53,
+          "missed": 0,
+          "cost": 159000.0
+        },
+        "calendar": {
+          "sprays": 13,
+          "missed": 22,
+          "cost": 1689000.0
+        },
+        "model_cost": {
+          "sprays": 46,
+          "missed": 0,
+          "cost": 138000.0
+        },
+        "model_f1": {
+          "sprays": 31,
+          "missed": 0,
+          "cost": 93000.0
+        }
+      }
+    },
+    "20": {
+      "spray": 3500,
+      "threshold": 0.04666666666666667,
+      "policies": {
+        "never": {
+          "sprays": 0,
+          "missed": 22,
+          "cost": 1650000.0
+        },
+        "always": {
+          "sprays": 53,
+          "missed": 0,
+          "cost": 185500.0
+        },
+        "calendar": {
+          "sprays": 13,
+          "missed": 22,
+          "cost": 1695500.0
+        },
+        "model_cost": {
+          "sprays": 46,
+          "missed": 0,
+          "cost": 161000.0
+        },
+        "model_f1": {
+          "sprays": 31,
+          "missed": 0,
+          "cost": 108500.0
+        }
+      }
+    }
+  }
+}
