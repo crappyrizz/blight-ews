@@ -17,18 +17,19 @@ import 'models.dart';
 
 /// The backend's address. THE ONE PLACE TO CHANGE IT.
 ///
-/// During development this is the PC's address on the local network (the
-/// phone and the PC must be on the same Wi-Fi). Without editing this file it
-/// can also be set at run time:
-///   flutter run --dart-define=API_BASE_URL=http://192.168.1.77:8000
-/// Over USB, `adb reverse tcp:8000 tcp:8000` lets the phone use
-///   --dart-define=API_BASE_URL=http://127.0.0.1:8000
+/// By default the hosted server on Render (README, "Deployment"), reachable
+/// from any network. For a backend running on the PC, set it at build time:
+///   flutter run --dart-define=API_BASE_URL=http://192.168.1.77:8000   (same Wi-Fi)
+/// or over USB, after `adb reverse tcp:8000 tcp:8000`:
+///   flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 const String apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'http://192.168.137.38:8000',
+  defaultValue: 'https://blight-ews-api.onrender.com',
 );
 
-const Duration _timeout = Duration(seconds: 15);
+// Render's free server sleeps after 15 quiet minutes and takes about a minute
+// to wake, so the first request after a pause needs more than a few seconds.
+const Duration _timeout = Duration(seconds: 75);
 const Duration _uploadTimeout = Duration(seconds: 90); // photos on a weak network
 const String _tokenKey = 'access_token';
 
@@ -166,7 +167,8 @@ class Api {
     try {
       response = await call();
     } on TimeoutException {
-      throw ApiException('The server is taking too long to answer. Please try again.');
+      throw ApiException('The server is taking too long to answer. It may be waking up after a quiet '
+          'spell, which can take a minute. Please try again.');
     } on SocketException {
       throw ApiException("Can't reach the server. Check that your phone has internet "
           '(or is on the same Wi-Fi as the server) and try again.');
