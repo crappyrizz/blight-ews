@@ -144,6 +144,12 @@ After that, every merge to `main` redeploys.
 | Render filesystem | Lost on every restart and redeploy. | Uploaded leaf photos are not kept; the diagnoses (in the database) are. |
 | Neon Postgres | Pauses after about 5 idle minutes and resumes on the next query. About 100 compute-hours a month at the smallest size. | Uploading **hourly** (the firmware contract's default) keeps both inside the free allowance; a device posting every few minutes would keep Neon awake around the clock and use the month's hours in about two weeks. |
 
+**IoT demo devices.** Besides the plot node and the hardware nodes (`node-01`, `node-02`, owned by the admin account), two devices are owned by the farmer so they appear in the app's sensor picker:
+
+- `wokwi-01`: the Wokwi simulated ESP32. Its key is in a public Wokwi project, so it is treated as public: it can only add readings to `wokwi-01`, and re-registering replaces it.
+- `demo-01`: seeded demo data only. `python -m tools.seed_demo_event` resets it (readings, risk scores, alerts, last risk level) and writes 16 days of hourly readings ending yesterday, the last two Hutton days. 16 days covers the learned model's 15-day look-back, which fusion prefers over the Hutton score. Run it the night before a demo, after any rehearsal; it refuses IDs that do not start with `demo-`.
+- `POST /admin/nodes/{node_id}/rescore` (admin only) runs the hourly job's scoring and SMS check for one node now, so the demo shows the alert at once instead of up to an hour later.
+
 **Updating the models:** retrain, upload the files to a new GitHub release, and put its tag in `tools/fetch_models.py` and the new checksums in `models/models.sha256`.
 
 ## Tests and evaluations

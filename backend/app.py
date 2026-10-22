@@ -230,6 +230,33 @@ def post_device_readings(
     return ingest.ingest_device_batch(db, node, raw_readings)
 
 
+@app.post("/admin/nodes/{node_id}/rescore")
+def rescore_node(
+    node_id: str,
+    admin: Farmer = Depends(auth.require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin only: score one node now (risk and SMS check), instead of waiting for the hourly job.
+
+    Runs exactly what the hourly job runs for a node, so the result is what the
+    job would have produced. Answers with the node's current risk level and,
+    if the SMS policy fired, the high-risk SMS status.
+    """
+    node = db.get(SensorNode, node_id)
+    if node is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Node not found")
+    summary = risk_job.score_node(db, node, risk_job.local_today(), risk_job.learned_model_available())
+    risk = fusion.resolve_risk(db, node.node_id, risk_job.local_today())
+    return {
+        "node_id": node.node_id,
+        "risk_level": ingest.current_risk_level(db, node),
+        "risk_score": risk.score,
+        "risk_basis": risk.basis,
+        "high_risk_sms": summary[-1]["high_risk_sms"],
+        "scores": summary,
+    }
+
+
 @app.get("/nodes/{node_id}/readings", response_model=list[ReadingOut])
 def get_readings(
     node_id: str,

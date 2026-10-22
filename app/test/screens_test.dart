@@ -156,6 +156,25 @@ void main() {
     });
   });
 
+  group('Sensor picker', () {
+    final plot = SensorNode(nodeId: 'NODE-E30CEA4721CE', location: 'Kinangop plot');
+    final sim = SensorNode(nodeId: 'wokwi-01', location: 'Wokwi node');
+    final demo = SensorNode(nodeId: 'demo-01', location: 'Demo node');
+
+    test('reopens on the sensor the farmer last chose', () {
+      expect(pickNode([plot, sim, demo], 'demo-01'), same(demo));
+    });
+
+    test('falls back to the first sensor when nothing, or a sensor no longer theirs, was remembered', () {
+      expect(pickNode([plot, sim], null), same(plot));
+      expect(pickNode([plot, sim], 'node-99'), same(plot));
+    });
+
+    test('names a sensor by place, then ID', () {
+      expect(nodeLabel(sim), 'Wokwi node (wokwi-01)');
+    });
+  });
+
   test('by default the app talks to the hosted server over HTTPS', () {
     // A plain build must reach the Render deployment from any network; a PC
     // address is only ever passed in with --dart-define.
