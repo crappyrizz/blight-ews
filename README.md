@@ -82,6 +82,32 @@ psql -U postgres -c "CREATE DATABASE blight_ews_test OWNER blight;"
 
 **Firmware contract.** The node's API (headers, payload, limits, status codes, buffering and retry rules) is in [docs/firmware_contract.md](docs/firmware_contract.md). The simulator follows it exactly, so the real ESP32 can replace it without a server change.
 
+## Exposing the API for devices
+
+ESP32 nodes in the field, and nodes in the Wokwi simulator (whose free plan cannot reach `localhost`), need a public HTTPS address. For development, a **Cloudflare quick tunnel** gives the local backend one, with no account and no router changes:
+
+```powershell
+winget install --id Cloudflare.cloudflared --exact      # once (open a new PowerShell afterwards)
+
+.\dev.ps1 serve                                           # window 1: the backend on 127.0.0.1:8000
+cloudflared tunnel --url http://127.0.0.1:8000            # window 2: prints https://<random-words>.trycloudflare.com
+```
+
+- Devices then post to `https://<random-words>.trycloudflare.com/readings` with their `X-Device-Key` (see [docs/firmware_contract.md](docs/firmware_contract.md) §4a). The tunnel adds HTTPS; on the ESP32 use `WiFiClientSecure` (for a bench test, `setInsecure()` skips certificate checks).
+- The URL is random and **changes every time** the tunnel restarts, so update the firmware or Wokwi sketch each time. Quick tunnels have no uptime guarantee and are for development only.
+- While the tunnel runs, the whole API (including `/docs`) is reachable by anyone with the URL. Device keys and farmer logins still apply. Stop it with Ctrl + C when you are done.
+- Test it from PowerShell (reads node-01's key from `device_keys.local.env`, written by `tools/register_device.py`):
+
+  ```powershell
+  $url  = "https://<random-words>.trycloudflare.com"
+  $key  = (Select-String -Path device_keys.local.env -Pattern '^DEVICE_KEY_NODE_01=(.+)$').Matches[0].Groups[1].Value
+  $body = @{ device_id = "node-01"; ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); temp_c = 18.5; rh = 72.0 } | ConvertTo-Json -Compress
+  $body | curl.exe -s -X POST "$url/readings" -H "Content-Type: application/json" -H "X-Device-Key: $key" --data-binary "@-"
+  ```
+
+  A good answer is `{"stored":1,"skipped":0,"rejected":[],"risk_level":"unknown"}`. (The body is piped in because Windows PowerShell 5.1 strips the double quotes out of a JSON string passed to `curl.exe -d`.)
+- **The tunnel needs outbound port 7844** (QUIC or TCP) to reach Cloudflare. Some networks, including mobile hotspots, block it: the log then shows `Allow outbound TCP on port 7844` and `dial tcp …:7844: i/o timeout`. Use another network (home or campus Wi-Fi), or a hosted deployment.
+
 ## Tests and evaluations
 
 ```powershell
