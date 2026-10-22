@@ -27,4 +27,4 @@ repos:
         name: never commit .env (secrets live there)
         entry: .env files hold secrets and must not be committed; use .env.example
         language: fail
-        files: (^|/)\.env$
+        files: (^|/)\.env$|\.local\.env$
