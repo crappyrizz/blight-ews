@@ -1,7 +1,7 @@
 // Blight EWS sensor node: ESP32 + temperature/humidity sensor + SSD1306 OLED.
 //
 // Stage C of the IoT workplan: the node measures on a timer, keeps every
-// reading in a buffer, and uploads the buffer in batches to the backend
+// reading in a buffer that is saved to flash, and uploads it in batches to the backend
 // (POST /readings, docs/firmware_contract.md section 4a). The OLED shows the
 // latest reading, the link status and the risk level the server answers with.
 //
@@ -23,8 +23,12 @@
 //   - never retry faster than once a minute . backoff in uploadBatch()
 //   - no reading without a real clock ....... measure() waits for NTP
 //   - buffer full: drop the oldest .......... bufferPush()
-// Still to come (Stage C, robustness): the buffer in flash, so a power cut
-// loses nothing, and an "offline" button for the demo.
+//   - a power cut loses nothing ............. saveBuffer() / loadBuffer() (LittleFS)
+//   - flush on reconnect .................... uploadDue() after the link returns
+// The "Offline" pushbutton (GPIO 4) cuts Wi-Fi in code for the demo and the
+// buffer test: press to go offline, press again to reconnect.
+// Note: Wokwi wipes its simulated flash on every restart, so the power-cut
+// part can only be shown on the real board.
 
 #include <Wire.h>
 #include <WiFi.h>
@@ -32,6 +36,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <LittleFS.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
@@ -64,6 +69,9 @@ const size_t BUFFER_SIZE = 1008;                       // 7 days at one reading 
 const size_t BATCH_SIZE = 100;                         // the server takes up to 500
 
 const uint8_t DHT_PIN = 15;
+const uint8_t OFFLINE_BUTTON_PIN = 4;  // to GND; pressed = LOW (internal pull-up)
+const char *BUFFER_FILE = "/buffer.bin";
+const char *BUFFER_TMP = "/buffer.tmp";
 const uint8_t OLED_ADDRESS = 0x3C;
 const uint8_t SHT31_ADDRESS = 0x44;
 const int SCREEN_WIDTH = 128;
@@ -100,6 +108,10 @@ unsigned long lastUploadMs = 0;
 unsigned long retryAfterMs = 0;          // 0: no failure pending; else wait until millis() passes it
 unsigned long backoffMs = RETRY_MIN_MS;
 bool uploadsStopped = false;             // a 401 / 413 / 422: needs a human, not a retry loop
+bool forcedOffline = false;              // the Offline button
+bool storageReady = false;               // LittleFS mounted
+bool wasConnected = false;               // to notice the link coming back
+unsigned long lastWifiAttemptMs = 0;
 String statusLine = "starting";          // shown at the bottom of the OLED
 String riskLevel = "-";                  // what the server last answered
 
@@ -123,6 +135,47 @@ void bufferDropOldest(size_t n) {
   n = min(n, bufferCount);
   bufferStart = (bufferStart + n) % BUFFER_SIZE;
   bufferCount -= n;
+}
+
+// The buffer in flash: rewritten after every change (a few KB at most), first
+// to a temporary file and then renamed over the old one, so a power cut in the
+// middle of a write leaves the previous copy intact.
+void saveBuffer() {
+  if (!storageReady) return;
+  File f = LittleFS.open(BUFFER_TMP, "w");
+  if (!f) {
+    Serial.println("flash: cannot write the buffer");
+    return;
+  }
+  for (size_t i = 0; i < bufferCount; i++) {
+    const Reading &r = bufferAt(i);
+    f.write((const uint8_t *)&r, sizeof(Reading));
+  }
+  f.close();
+  if (!LittleFS.rename(BUFFER_TMP, BUFFER_FILE)) {
+    LittleFS.remove(BUFFER_FILE);
+    LittleFS.rename(BUFFER_TMP, BUFFER_FILE);
+  }
+}
+
+void loadBuffer() {
+  File f = LittleFS.open(BUFFER_FILE, "r");
+  if (!f) return;
+  Reading r;
+  size_t loaded = 0, skipped = 0;
+  while (f.read((uint8_t *)&r, sizeof(Reading)) == sizeof(Reading)) {
+    // Keep only plausible rows: a damaged file must never send nonsense.
+    bool ok = r.ts > CLOCK_VALID_AFTER && r.tempC >= -40 && r.tempC <= 85 && r.rh >= 0 && r.rh <= 100;
+    if (ok) {
+      bufferPush(r);
+      loaded++;
+    } else {
+      skipped++;
+    }
+  }
+  f.close();
+  Serial.printf("flash: %u buffered readings restored (%u damaged rows skipped)\n", (unsigned)loaded,
+                (unsigned)skipped);
 }
 
 // --- the sensor: THE ONLY PART THAT CHANGES BETWEEN WOKWI AND THE REAL NODE ----------------
@@ -208,13 +261,33 @@ void showScreen() {
 // --- Wi-Fi ------------------------------------------------------------------------------------------
 
 void keepWifiUp() {
-  static unsigned long lastAttemptMs = 0;
-  if (WiFi.status() == WL_CONNECTED) return;
-  if (millis() - lastAttemptMs < 30UL * 1000 && lastAttemptMs != 0) return;  // try every 30 s
-  lastAttemptMs = millis();
+  if (forcedOffline || WiFi.status() == WL_CONNECTED) return;
+  if (millis() - lastWifiAttemptMs < 30UL * 1000 && lastWifiAttemptMs != 0) return;  // try every 30 s
+  lastWifiAttemptMs = millis();
   Serial.println("Wi-Fi: connecting...");
   WiFi.disconnect();
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD, 6);  // channel 6 makes Wokwi-GUEST connect faster
+}
+
+// The Offline button: press to cut Wi-Fi, press again to reconnect.
+void checkOfflineButton() {
+  static int lastState = HIGH;
+  static unsigned long lastChangeMs = 0;
+  int state = digitalRead(OFFLINE_BUTTON_PIN);
+  if (state == lastState || millis() - lastChangeMs < 50) return;  // 50 ms debounce
+  lastChangeMs = millis();
+  lastState = state;
+  if (state != LOW) return;  // act on the press, not the release
+  forcedOffline = !forcedOffline;
+  if (forcedOffline) {
+    WiFi.disconnect();
+    statusLine = "OFFLINE (button)";
+    Serial.println("Offline button: Wi-Fi off, readings are buffered");
+  } else {
+    statusLine = "reconnecting";
+    lastWifiAttemptMs = 0;  // reconnect straight away
+    Serial.println("Offline button: reconnecting");
+  }
 }
 
 // --- measuring --------------------------------------------------------------------------------------
@@ -230,6 +303,7 @@ void measure() {
   readingCount++;
   if (last.ok) {
     bufferPush({time(nullptr), last.tempC, last.rh});
+    saveBuffer();  // buffer first, send second
     Serial.printf("reading %lu: %.1f C, %.1f %% RH at %s (buffered: %u)\n", readingCount, last.tempC, last.rh,
                   isoUtc(time(nullptr)).c_str(), (unsigned)bufferCount);
   } else {
@@ -284,6 +358,7 @@ bool uploadBatch() {
                     (int)(answer["skipped"] | 0), (unsigned)answer["rejected"].size(), riskLevel.c_str());
     }
     bufferDropOldest(n);
+    saveBuffer();
     backoffMs = RETRY_MIN_MS;
     retryAfterMs = 0;
     statusLine = "online, sent " + String(n);
@@ -309,7 +384,11 @@ bool uploadBatch() {
 }
 
 void uploadDue() {
-  if (uploadsStopped || bufferCount == 0 || WiFi.status() != WL_CONNECTED || !clockIsSet()) return;
+  bool connected = WiFi.status() == WL_CONNECTED && !forcedOffline;
+  bool justReconnected = connected && !wasConnected;
+  wasConnected = connected;
+  if (uploadsStopped || bufferCount == 0 || !connected || !clockIsSet()) return;
+  if (justReconnected && retryAfterMs == 0) lastUploadMs = millis() - UPLOAD_EVERY_MS;  // flush on reconnect
   if (retryAfterMs != 0 && (long)(millis() - retryAfterMs) < 0) return;  // still backing off
   if (retryAfterMs == 0 && millis() - lastUploadMs < UPLOAD_EVERY_MS) return;
   lastUploadMs = millis();
@@ -330,6 +409,14 @@ void setup() {
   if (!displayReady) Serial.println("OLED not found at 0x3C: continuing without a display");
   if (!setupSensor()) Serial.println("Sensor not found: check the wiring");
 
+  pinMode(OFFLINE_BUTTON_PIN, INPUT_PULLUP);
+  storageReady = LittleFS.begin(true);  // true: format the partition the first time
+  if (storageReady) {
+    loadBuffer();
+  } else {
+    Serial.println("flash: LittleFS unavailable, buffering in RAM only");
+  }
+
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   keepWifiUp();
@@ -342,11 +429,13 @@ void setup() {
 }
 
 void loop() {
+  checkOfflineButton();
   keepWifiUp();
-  if (WiFi.status() == WL_CONNECTED && (statusLine == "starting" || statusLine == "offline, buffering")) {
+  bool connected = WiFi.status() == WL_CONNECTED && !forcedOffline;
+  if (connected && (statusLine == "starting" || statusLine == "offline, buffering" || statusLine == "reconnecting")) {
     statusLine = "Wi-Fi ok";
   }
-  if (WiFi.status() != WL_CONNECTED && !uploadsStopped) statusLine = "offline, buffering";
+  if (!connected && !uploadsStopped) statusLine = forcedOffline ? "OFFLINE (button)" : "offline, buffering";
 
   if (millis() - lastMeasureMs >= MEASURE_EVERY_MS) {
     lastMeasureMs = millis();
