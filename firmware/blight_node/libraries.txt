@@ -1,0 +1,4 @@
+# Wokwi library list (one per line). Arduino IDE / arduino-cli: install the same names.
+DHT sensor library for ESPx
+Adafruit SSD1306
+Adafruit GFX Library
