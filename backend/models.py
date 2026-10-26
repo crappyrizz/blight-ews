@@ -133,6 +133,12 @@ class RiskScore(Base):
     __tablename__ = "risk_scores"
     __table_args__ = (
         CheckConstraint("method IN ('hutton', 'learned')", name="ck_risk_scores_method"),
+        # One score per node, method, source, horizon and day. Writers update the
+        # existing row; this makes the database refuse a second one outright.
+        UniqueConstraint(
+            "node_id", "method", "data_source", "horizon_hours", "for_date",
+            name="uq_risk_scores_node_method_source_horizon_day",
+        ),
         CheckConstraint("data_source IN ('sensor', 'api')", name="ck_risk_scores_data_source"),
         CheckConstraint("horizon_hours IN (0, 24, 48)", name="ck_risk_scores_horizon_hours"),
         CheckConstraint("score >= 0 AND score <= 1", name="ck_risk_scores_score_range"),

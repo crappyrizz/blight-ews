@@ -104,7 +104,15 @@ def score_node(session: Session, node: SensorNode, today: date, learned_availabl
 
     Used by the hourly job for every node, and by the admin re-score endpoint
     for one node on demand. Commits, so a later failure keeps this node's scores.
+
+    One run per node at a time: the node's row is locked (SELECT ... FOR UPDATE)
+    until the commit at the end. A second run for the same node (an admin
+    re-score pressed twice, or one overlapping the hourly job) waits here, then
+    finds the scores already written (so it updates them) and the node already
+    at its level (so the high-risk SMS is not sent twice). The lock also reloads
+    last_risk_level, so the waiting run sees what the first one decided.
     """
+    session.refresh(node, with_for_update=True)
     days = [today - timedelta(days=n) for n in range(LOOKBACK_DAYS, -1, -1)]
     summary = []
     for source in DATA_SOURCES:
