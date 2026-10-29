@@ -1,4 +1,4 @@
-// Blight EWS sensor node: ESP32 + temperature/humidity sensor + SSD1306 OLED.
+// Blight EWS sensor node: ESP32 + temperature/humidity sensor + 128x64 I2C OLED (SH1106 or SSD1306).
 //
 // Stage C of the IoT workplan: the node measures on a timer, keeps every
 // reading in a buffer that is saved to flash, and uploads it in batches to the backend
@@ -37,8 +37,7 @@
 #include <ArduinoJson.h>
 #include <time.h>
 #include <LittleFS.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <U8g2lib.h>
 
 #include "secrets.h"  // WIFI_SSID, WIFI_PASSWORD, DEVICE_ID, DEVICE_KEY, API_URL
 
@@ -47,6 +46,14 @@
 #define SENSOR_SHT31 2  // the real node (needs the "Adafruit SHT31 Library")
 #define SENSOR SENSOR_DHT22
 
+// --- which OLED controller ----------------------------------------------------------------
+// The lab's 1.3" modules ("1.30 IIC" on the back) use an SH1106; Wokwi's OLED is an SSD1306.
+// They look alike and answer at the same address, but each needs its own driver: the wrong one
+// leaves the screen dark although the chip answers on I2C.
+#define DISPLAY_SSD1306 1
+#define DISPLAY_SH1106 2
+#define DISPLAY_CHIP DISPLAY_SSD1306  // the 0.96" GME12864-11 module; the 1.3" "1.30 IIC" ones are SH1106
+
 #if SENSOR == SENSOR_DHT22
 #include <DHTesp.h>
 #elif SENSOR == SENSOR_SHT31
@@ -54,15 +61,18 @@
 #endif
 
 // --- settings --------------------------------------------------------------------------
-// DEMO_MODE: measure every 15 s, upload every 30 s, so changes show quickly.
+// DEMO_MODE: measure every 5 s, upload every 30 s, so changes show quickly (e.g. breathing on the sensor).
 // Normal mode is the firmware contract's rate: measure every 10 min, upload
 // hourly. Never leave demo mode running for days: it would use up the free
 // hosting allowance (Render and Neon).
-const bool DEMO_MODE = true;
-const unsigned long MEASURE_EVERY_MS = DEMO_MODE ? 15UL * 1000 : 10UL * 60 * 1000;
+const bool DEMO_MODE = false;
+const unsigned long MEASURE_EVERY_MS = DEMO_MODE ? 5UL * 1000 : 10UL * 60 * 1000;  // DHT22: at most one read per 2 s
 const unsigned long UPLOAD_EVERY_MS = DEMO_MODE ? 30UL * 1000 : 60UL * 60 * 1000;
 
-const unsigned long HTTP_TIMEOUT_MS = 90UL * 1000;     // Render can take ~1 min to wake up
+// Render can take ~1 min to wake up. HTTPClient keeps this in a uint16_t, so 65,535 ms is the
+// most it can hold: 90,000 silently wrapped to ~24.5 s (found on the real board). A wake-up that
+// takes longer still is caught by the retry a minute later, by which time the server is up.
+const uint16_t HTTP_TIMEOUT_MS = 65000;
 const unsigned long RETRY_MIN_MS = 60UL * 1000;        // never retry faster than once a minute
 const unsigned long RETRY_MAX_MS = 30UL * 60 * 1000;   // back off to at most 30 min
 const size_t BUFFER_SIZE = 1008;                       // 7 days at one reading per 10 min
@@ -78,6 +88,58 @@ const int SCREEN_WIDTH = 128;
 const int SCREEN_HEIGHT = 64;
 const time_t CLOCK_VALID_AFTER = 1700000000;  // 2023: anything earlier means NTP has not answered yet
 
+// --- who the node trusts -----------------------------------------------------------------------
+// The server's certificate must chain to one of these roots, or nothing is sent (the device key
+// never goes to an impostor). Render's chain (Oct 2026): onrender.com <- WE1 <- GTS Root R4.
+// GTS Root R1 is Google's RSA root, in case Render's certificates move to that chain. Both are
+// valid until 2036; taken from the Mozilla root store. Checking dates needs the clock, which is
+// always set before anything is uploaded.
+const char *ROOT_CA =
+    "-----BEGIN CERTIFICATE-----\n"
+    "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\n"
+    "bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c\n"
+    "-----END CERTIFICATE-----\n"
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD\n"
+    "VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG\n"
+    "A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw\n"
+    "WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz\n"
+    "IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi\n"
+    "AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi\n"
+    "QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR\n"
+    "HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW\n"
+    "BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D\n"
+    "9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8\n"
+    "p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD\n"
+    "-----END CERTIFICATE-----\n";
+
 // --- one reading ---------------------------------------------------------------------------
 struct Climate {
   bool ok;        // false: the sensor did not answer, or answered nonsense
@@ -91,7 +153,11 @@ struct Reading {  // what is buffered and sent
   float rh;
 };
 
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+#if DISPLAY_CHIP == DISPLAY_SH1106
+U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
+#else
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
+#endif
 bool displayReady = false;
 
 #if SENSOR == SENSOR_DHT22
@@ -109,8 +175,10 @@ unsigned long retryAfterMs = 0;          // 0: no failure pending; else wait unt
 unsigned long backoffMs = RETRY_MIN_MS;
 bool uploadsStopped = false;             // a 401 / 413 / 422: needs a human, not a retry loop
 bool forcedOffline = false;              // the Offline button
+bool buttonArmed = false;                // set once the button has been seen released
 bool storageReady = false;               // LittleFS mounted
 bool wasConnected = false;               // to notice the link coming back
+bool flushPending = false;               // link came back: send the backlog as soon as the clock is set
 unsigned long lastWifiAttemptMs = 0;
 String statusLine = "starting";          // shown at the bottom of the OLED
 String riskLevel = "-";                  // what the server last answered
@@ -152,9 +220,20 @@ void saveBuffer() {
     f.write((const uint8_t *)&r, sizeof(Reading));
   }
   f.close();
-  if (!LittleFS.rename(BUFFER_TMP, BUFFER_FILE)) {
+  bool renamed = LittleFS.rename(BUFFER_TMP, BUFFER_FILE);
+  if (!renamed) {
     LittleFS.remove(BUFFER_FILE);
-    LittleFS.rename(BUFFER_TMP, BUFFER_FILE);
+    renamed = LittleFS.rename(BUFFER_TMP, BUFFER_FILE);
+  }
+  File check = LittleFS.open(BUFFER_FILE, "r");
+  size_t bytes = check ? check.size() : 0;
+  if (check) check.close();
+  if (!renamed || bytes != bufferCount * sizeof(Reading)) {
+    Serial.printf("flash: SAVE PROBLEM: %u readings in memory, %u bytes in %s (expected %u), rename %s\n",
+                  (unsigned)bufferCount, (unsigned)bytes, BUFFER_FILE, (unsigned)(bufferCount * sizeof(Reading)),
+                  renamed ? "ok" : "FAILED");
+  } else if (DEMO_MODE) {
+    Serial.printf("flash: saved %u readings (%u bytes)\n", (unsigned)bufferCount, (unsigned)bytes);
   }
 }
 
@@ -222,40 +301,39 @@ String isoUtc(time_t ts) {  // 2026-10-26T09:15:00Z, as the server expects
 
 void showScreen() {
   if (!displayReady) return;
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
+  // U8g2: setCursor gives the text's BASELINE, so each line's y is the bottom of its letters.
+  display.clearBuffer();
 
-  display.setTextSize(1);
-  display.setCursor(0, 0);
+  display.setFont(u8g2_font_6x10_tf);
+  display.setCursor(0, 9);
   display.print(DEVICE_ID);
   display.print(DEMO_MODE ? " demo" : "");
-  display.setCursor(80, 0);
+  display.setCursor(80, 9);
   display.print("buf ");
   display.print(bufferCount);
 
   if (last.ok) {
-    display.setTextSize(2);
-    display.setCursor(0, 12);
+    display.setFont(u8g2_font_ncenB14_tr);
+    display.setCursor(0, 27);
     display.print(last.tempC, 1);
     display.print(" C");
-    display.setCursor(0, 30);
+    display.setCursor(0, 44);
     display.print(last.rh, 1);
     display.print(" %");
   } else {
-    display.setTextSize(1);
-    display.setCursor(0, 20);
+    display.setCursor(0, 26);
     display.print(clockIsSet() ? "Sensor error:" : "Waiting for the");
-    display.setCursor(0, 30);
+    display.setCursor(0, 37);
     display.print(clockIsSet() ? "check the wiring" : "clock (NTP)...");
   }
 
-  display.setTextSize(1);
-  display.setCursor(0, 47);
+  display.setFont(u8g2_font_6x10_tf);
+  display.setCursor(0, 54);
   display.print("Risk: ");
   display.print(riskLevel);
-  display.setCursor(0, 56);
+  display.setCursor(0, 64);
   display.print(statusLine);
-  display.display();
+  display.sendBuffer();
 }
 
 // --- Wi-Fi ------------------------------------------------------------------------------------------
@@ -274,6 +352,13 @@ void checkOfflineButton() {
   static int lastState = HIGH;
   static unsigned long lastChangeMs = 0;
   int state = digitalRead(OFFLINE_BUTTON_PIN);
+  if (!buttonArmed) {
+    if (state == HIGH) {
+      buttonArmed = true;  // released at last: from now on a press counts
+      Serial.println("Offline button: released, now active");
+    }
+    return;
+  }
   if (state == lastState || millis() - lastChangeMs < 50) return;  // 50 ms debounce
   lastChangeMs = millis();
   lastState = state;
@@ -330,7 +415,7 @@ bool uploadBatch() {
   serializeJson(body, payload);
 
   WiFiClientSecure tls;
-  tls.setInsecure();  // Wokwi only. The real node verifies the certificate (Stage D: CA bundle).
+  tls.setCACert(ROOT_CA);
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setConnectTimeout(30000);
@@ -379,16 +464,25 @@ bool uploadBatch() {
   statusLine = "retry in " + String(backoffMs / 60000) + " min";
   Serial.printf("upload: failed (%d %s), retrying in %lu s\n", code, http.errorToString(code).c_str(),
                 backoffMs / 1000);
+  char tlsError[100];
+  if (code < 0 && tls.lastError(tlsError, sizeof tlsError) != 0) Serial.printf("  TLS: %s\n", tlsError);
   backoffMs = min(backoffMs * 2, RETRY_MAX_MS);
   return false;
 }
 
 void uploadDue() {
   bool connected = WiFi.status() == WL_CONNECTED && !forcedOffline;
-  bool justReconnected = connected && !wasConnected;
+  if (connected && !wasConnected) flushPending = true;
   wasConnected = connected;
-  if (uploadsStopped || bufferCount == 0 || !connected || !clockIsSet()) return;
-  if (justReconnected && retryAfterMs == 0) lastUploadMs = millis() - UPLOAD_EVERY_MS;  // flush on reconnect
+  // After a boot, Wi-Fi connects a moment before NTP answers: the flush waits here for the clock
+  // instead of being lost (in normal mode the backlog then sat for up to an hour; found on the board).
+  if (!connected || !clockIsSet()) return;
+  if (uploadsStopped || bufferCount == 0) {
+    flushPending = false;
+    return;
+  }
+  if (flushPending && retryAfterMs == 0) lastUploadMs = millis() - UPLOAD_EVERY_MS;  // flush on reconnect
+  flushPending = false;
   if (retryAfterMs != 0 && (long)(millis() - retryAfterMs) < 0) return;  // still backing off
   if (retryAfterMs == 0 && millis() - lastUploadMs < UPLOAD_EVERY_MS) return;
   lastUploadMs = millis();
@@ -405,11 +499,23 @@ void setup() {
                 DEMO_MODE ? "demo" : "normal", MEASURE_EVERY_MS / 1000, UPLOAD_EVERY_MS / 1000);
 
   Wire.begin(21, 22);  // SDA, SCL
-  displayReady = display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS);
+  // Only drive the OLED if it answers: with no display fitted, every frame would fail and flood
+  // the serial log with I2C errors.
+  Wire.beginTransmission(OLED_ADDRESS);
+  if (Wire.endTransmission() == 0) {
+    displayReady = display.begin();  // U8g2 uses address 0x3C by default
+    display.setContrast(255);
+  }
   if (!displayReady) Serial.println("OLED not found at 0x3C: continuing without a display");
   if (!setupSensor()) Serial.println("Sensor not found: check the wiring");
 
   pinMode(OFFLINE_BUTTON_PIN, INPUT_PULLUP);
+  delay(10);
+  buttonArmed = digitalRead(OFFLINE_BUTTON_PIN) == HIGH;
+  if (!buttonArmed) {
+    Serial.println("Offline button reads PRESSED at start-up: ignored until released "
+                   "(if it never releases, its wires are on the same pair of legs: use diagonal legs)");
+  }
   storageReady = LittleFS.begin(true);  // true: format the partition the first time
   if (storageReady) {
     loadBuffer();
@@ -442,7 +548,7 @@ void loop() {
     measure();
     showScreen();
   }
-  uploadDue();  // blocks while a request is in flight (up to 90 s); the next reading follows it
+  uploadDue();  // blocks while a request is in flight (up to 65 s); the next reading follows it
   showScreen();
   delay(200);  // keep the OLED from redrawing hundreds of times a second
 }

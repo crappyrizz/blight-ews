@@ -74,4 +74,5 @@ skills-lock.json
 .mcp.json
 
 # Firmware secrets (Wi-Fi, device keys): firmware/<sketch>/secrets.example.h shows the format
-firmware/**/secrets.h
+firmware/**/secrets*.h
+!firmware/**/secrets.example.h
