@@ -19,7 +19,8 @@ One Arduino sketch for both the Wokwi simulation and the real node. It measures 
 
 - **No reading without a real clock:** nothing is kept until NTP has set the time (contract §7).
 - **Buffer first, send second:** each reading goes into a 7-day ring buffer (1,008 readings), saved to LittleFS after every change and restored at boot. When full, the oldest reading is dropped.
-- **Uploads:** batches of up to 100, oldest first, with a 65 s timeout, the most the ESP32 HTTP client can hold (the free Render server takes about a minute to wake; a longer wake-up is caught by the retry). A `200` removes the whole batch from the buffer. `401`, `413` or `422` stops uploads and shows the code on the OLED. Network errors, timeouts and `5xx` keep the data and retry after 1, 2, 4 … 30 min. Reconnecting flushes the buffer at once.
+- **Uploads:** batches of up to 100, oldest first, with a 65 s timeout, the most the ESP32 HTTP client can hold (the free Render server takes about a minute to wake; a longer wake-up is caught by the retry). A `200` removes the whole batch from the buffer. `401`, `413` or `422` stops uploads and shows the code on the OLED. Network errors, timeouts and `5xx` keep the data and retry after 1, 2, 4 … 30 min. Reconnecting (and starting up) flushes the buffer as soon as the clock is set.
+- **Only the real server:** the server's certificate must chain to one of the two roots in `ROOT_CA` (GTS Root R4, which Render uses, and GTS Root R1; both valid until 2036), or nothing is sent and the log prints the `TLS:` reason. If Render ever moves to another certificate authority, add its root there.
 - **Offline button:** press to cut Wi-Fi in code, press again to reconnect. For the demo and the buffer test.
 - Never leave demo mode running for days: it would use up the free hosting allowance.
 
@@ -36,12 +37,12 @@ Wokwi wipes its simulated flash on every restart, so surviving a power cut can o
 
 ```powershell
 arduino-cli core install esp32:esp32
-arduino-cli lib install "DHT sensor library for ESPx" "Adafruit SSD1306" "Adafruit GFX Library" "ArduinoJson"
+arduino-cli lib install "DHT sensor library for ESPx" "U8g2" "ArduinoJson"
 arduino-cli compile --fqbn esp32:esp32:esp32 firmware\blight_node
-arduino-cli upload  --fqbn esp32:esp32:esp32 -p COM5 firmware\blight_node    # the board's COM port
+arduino-cli upload  --fqbn esp32:esp32:esp32 -p COM8 firmware\blight_node    # the board's COM port
 ```
 
-Currently 85 % of flash and 20 % of RAM.
+Currently 86 % of flash and 20 % of RAM. Close any serial monitor on the port before uploading. The node in the lab runs **normal mode**; set `DEMO_MODE = true` and flash again for a demo.
 
 ## Tested (Wokwi, 26 Oct 2026)
 
@@ -64,7 +65,7 @@ ESP32 DevKit V1 (CP2102 USB chip: install the Silicon Labs CP210x driver once; i
 
 Optional, same as Wokwi: OLED on 3V3 / GND / SCL D22 / SDA D21 (the sketch skips it if it does not answer at 0x3C), and the Offline button from D4 to GND on diagonally opposite legs (a button that reads pressed at start-up is ignored until released).
 
-**Tested on the board:** readings every 5 s in demo mode; uploads land in Neon as node-01 with no duplicates; with the hotspot off the node keeps measuring and buffering, and on reconnect delivers the whole backlog once; after a reset only the unsent readings are restored from flash; a sleeping Render server is ridden out by the retry. Not working in the lab build: the OLED (both modules tried answer on I2C but stay dark: about 1.3 V at the module's VCC, a supply/connection fault) and the button (no contact reached the pin); both are shown working in Wokwi.
+**Tested on the board:** readings every 5 s in demo mode; uploads land in Neon as node-01 with no duplicates; with the hotspot off the node keeps measuring and buffering, and on reconnect delivers the whole backlog once; after a reset only the unsent readings are restored from flash; a sleeping Render server is ridden out by the retry; the certificate check passes against Render, and a build trusting only the wrong root was refused (`TLS: X509 - Certificate verification failed`) with every reading kept and delivered later; in normal mode the backlog goes out right after start-up. Not working in the lab build: the OLED (both modules tried answer on I2C but stay dark: about 1.3 V at the module's VCC, a supply/connection fault) and the button (no contact reached the pin); both are shown working in Wokwi.
 
 **Watching it:** `.\.venv\Scripts\python.exe -m tools.watch_readings node-01` prints each reading as it lands in the hosted database, next to the board's serial output (`arduino-cli monitor -p COM8 --config baudrate=115200`).
 
