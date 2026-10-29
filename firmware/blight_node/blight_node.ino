@@ -1,4 +1,4 @@
-// Blight EWS sensor node: ESP32 + temperature/humidity sensor + SSD1306 OLED.
+// Blight EWS sensor node: ESP32 + temperature/humidity sensor + 128x64 I2C OLED (SH1106 or SSD1306).
 //
 // Stage C of the IoT workplan: the node measures on a timer, keeps every
 // reading in a buffer that is saved to flash, and uploads it in batches to the backend
@@ -37,8 +37,7 @@
 #include <ArduinoJson.h>
 #include <time.h>
 #include <LittleFS.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <U8g2lib.h>
 
 #include "secrets.h"  // WIFI_SSID, WIFI_PASSWORD, DEVICE_ID, DEVICE_KEY, API_URL
 
@@ -47,6 +46,14 @@
 #define SENSOR_SHT31 2  // the real node (needs the "Adafruit SHT31 Library")
 #define SENSOR SENSOR_DHT22
 
+// --- which OLED controller ----------------------------------------------------------------
+// The lab's 1.3" modules ("1.30 IIC" on the back) use an SH1106; Wokwi's OLED is an SSD1306.
+// They look alike and answer at the same address, but each needs its own driver: the wrong one
+// leaves the screen dark although the chip answers on I2C.
+#define DISPLAY_SSD1306 1
+#define DISPLAY_SH1106 2
+#define DISPLAY_CHIP DISPLAY_SSD1306  // the 0.96" GME12864-11 module; the 1.3" "1.30 IIC" ones are SH1106
+
 #if SENSOR == SENSOR_DHT22
 #include <DHTesp.h>
 #elif SENSOR == SENSOR_SHT31
@@ -54,15 +61,18 @@
 #endif
 
 // --- settings --------------------------------------------------------------------------
-// DEMO_MODE: measure every 15 s, upload every 30 s, so changes show quickly.
+// DEMO_MODE: measure every 5 s, upload every 30 s, so changes show quickly (e.g. breathing on the sensor).
 // Normal mode is the firmware contract's rate: measure every 10 min, upload
 // hourly. Never leave demo mode running for days: it would use up the free
 // hosting allowance (Render and Neon).
 const bool DEMO_MODE = true;
-const unsigned long MEASURE_EVERY_MS = DEMO_MODE ? 15UL * 1000 : 10UL * 60 * 1000;
+const unsigned long MEASURE_EVERY_MS = DEMO_MODE ? 5UL * 1000 : 10UL * 60 * 1000;  // DHT22: at most one read per 2 s
 const unsigned long UPLOAD_EVERY_MS = DEMO_MODE ? 30UL * 1000 : 60UL * 60 * 1000;
 
-const unsigned long HTTP_TIMEOUT_MS = 90UL * 1000;     // Render can take ~1 min to wake up
+// Render can take ~1 min to wake up. HTTPClient keeps this in a uint16_t, so 65,535 ms is the
+// most it can hold: 90,000 silently wrapped to ~24.5 s (found on the real board). A wake-up that
+// takes longer still is caught by the retry a minute later, by which time the server is up.
+const uint16_t HTTP_TIMEOUT_MS = 65000;
 const unsigned long RETRY_MIN_MS = 60UL * 1000;        // never retry faster than once a minute
 const unsigned long RETRY_MAX_MS = 30UL * 60 * 1000;   // back off to at most 30 min
 const size_t BUFFER_SIZE = 1008;                       // 7 days at one reading per 10 min
@@ -91,7 +101,11 @@ struct Reading {  // what is buffered and sent
   float rh;
 };
 
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+#if DISPLAY_CHIP == DISPLAY_SH1106
+U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
+#else
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
+#endif
 bool displayReady = false;
 
 #if SENSOR == SENSOR_DHT22
@@ -109,6 +123,7 @@ unsigned long retryAfterMs = 0;          // 0: no failure pending; else wait unt
 unsigned long backoffMs = RETRY_MIN_MS;
 bool uploadsStopped = false;             // a 401 / 413 / 422: needs a human, not a retry loop
 bool forcedOffline = false;              // the Offline button
+bool buttonArmed = false;                // set once the button has been seen released
 bool storageReady = false;               // LittleFS mounted
 bool wasConnected = false;               // to notice the link coming back
 unsigned long lastWifiAttemptMs = 0;
@@ -152,9 +167,20 @@ void saveBuffer() {
     f.write((const uint8_t *)&r, sizeof(Reading));
   }
   f.close();
-  if (!LittleFS.rename(BUFFER_TMP, BUFFER_FILE)) {
+  bool renamed = LittleFS.rename(BUFFER_TMP, BUFFER_FILE);
+  if (!renamed) {
     LittleFS.remove(BUFFER_FILE);
-    LittleFS.rename(BUFFER_TMP, BUFFER_FILE);
+    renamed = LittleFS.rename(BUFFER_TMP, BUFFER_FILE);
+  }
+  File check = LittleFS.open(BUFFER_FILE, "r");
+  size_t bytes = check ? check.size() : 0;
+  if (check) check.close();
+  if (!renamed || bytes != bufferCount * sizeof(Reading)) {
+    Serial.printf("flash: SAVE PROBLEM: %u readings in memory, %u bytes in %s (expected %u), rename %s\n",
+                  (unsigned)bufferCount, (unsigned)bytes, BUFFER_FILE, (unsigned)(bufferCount * sizeof(Reading)),
+                  renamed ? "ok" : "FAILED");
+  } else if (DEMO_MODE) {
+    Serial.printf("flash: saved %u readings (%u bytes)\n", (unsigned)bufferCount, (unsigned)bytes);
   }
 }
 
@@ -222,40 +248,39 @@ String isoUtc(time_t ts) {  // 2026-10-26T09:15:00Z, as the server expects
 
 void showScreen() {
   if (!displayReady) return;
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
+  // U8g2: setCursor gives the text's BASELINE, so each line's y is the bottom of its letters.
+  display.clearBuffer();
 
-  display.setTextSize(1);
-  display.setCursor(0, 0);
+  display.setFont(u8g2_font_6x10_tf);
+  display.setCursor(0, 9);
   display.print(DEVICE_ID);
   display.print(DEMO_MODE ? " demo" : "");
-  display.setCursor(80, 0);
+  display.setCursor(80, 9);
   display.print("buf ");
   display.print(bufferCount);
 
   if (last.ok) {
-    display.setTextSize(2);
-    display.setCursor(0, 12);
+    display.setFont(u8g2_font_ncenB14_tr);
+    display.setCursor(0, 27);
     display.print(last.tempC, 1);
     display.print(" C");
-    display.setCursor(0, 30);
+    display.setCursor(0, 44);
     display.print(last.rh, 1);
     display.print(" %");
   } else {
-    display.setTextSize(1);
-    display.setCursor(0, 20);
+    display.setCursor(0, 26);
     display.print(clockIsSet() ? "Sensor error:" : "Waiting for the");
-    display.setCursor(0, 30);
+    display.setCursor(0, 37);
     display.print(clockIsSet() ? "check the wiring" : "clock (NTP)...");
   }
 
-  display.setTextSize(1);
-  display.setCursor(0, 47);
+  display.setFont(u8g2_font_6x10_tf);
+  display.setCursor(0, 54);
   display.print("Risk: ");
   display.print(riskLevel);
-  display.setCursor(0, 56);
+  display.setCursor(0, 64);
   display.print(statusLine);
-  display.display();
+  display.sendBuffer();
 }
 
 // --- Wi-Fi ------------------------------------------------------------------------------------------
@@ -274,6 +299,13 @@ void checkOfflineButton() {
   static int lastState = HIGH;
   static unsigned long lastChangeMs = 0;
   int state = digitalRead(OFFLINE_BUTTON_PIN);
+  if (!buttonArmed) {
+    if (state == HIGH) {
+      buttonArmed = true;  // released at last: from now on a press counts
+      Serial.println("Offline button: released, now active");
+    }
+    return;
+  }
   if (state == lastState || millis() - lastChangeMs < 50) return;  // 50 ms debounce
   lastChangeMs = millis();
   lastState = state;
@@ -405,11 +437,23 @@ void setup() {
                 DEMO_MODE ? "demo" : "normal", MEASURE_EVERY_MS / 1000, UPLOAD_EVERY_MS / 1000);
 
   Wire.begin(21, 22);  // SDA, SCL
-  displayReady = display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS);
+  // Only drive the OLED if it answers: with no display fitted, every frame would fail and flood
+  // the serial log with I2C errors.
+  Wire.beginTransmission(OLED_ADDRESS);
+  if (Wire.endTransmission() == 0) {
+    displayReady = display.begin();  // U8g2 uses address 0x3C by default
+    display.setContrast(255);
+  }
   if (!displayReady) Serial.println("OLED not found at 0x3C: continuing without a display");
   if (!setupSensor()) Serial.println("Sensor not found: check the wiring");
 
   pinMode(OFFLINE_BUTTON_PIN, INPUT_PULLUP);
+  delay(10);
+  buttonArmed = digitalRead(OFFLINE_BUTTON_PIN) == HIGH;
+  if (!buttonArmed) {
+    Serial.println("Offline button reads PRESSED at start-up: ignored until released "
+                   "(if it never releases, its wires are on the same pair of legs: use diagonal legs)");
+  }
   storageReady = LittleFS.begin(true);  // true: format the partition the first time
   if (storageReady) {
     loadBuffer();
@@ -442,7 +486,7 @@ void loop() {
     measure();
     showScreen();
   }
-  uploadDue();  // blocks while a request is in flight (up to 90 s); the next reading follows it
+  uploadDue();  // blocks while a request is in flight (up to 65 s); the next reading follows it
   showScreen();
   delay(200);  // keep the OLED from redrawing hundreds of times a second
 }
