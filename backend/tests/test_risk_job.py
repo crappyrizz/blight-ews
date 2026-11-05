@@ -277,6 +277,8 @@ def test_history_is_newest_first_with_gaps_shown(client, db_session, models):
     assert yesterday["learned"]["p24"]["sensor"] is not None
     oldest = body["risk"][-1]  # before the job's lookback: not computed, shown as a gap
     assert oldest["hutton"]["sensor"] is None and oldest["risk_level"] is None
+    # The app's trend chart draws the same bands the server uses.
+    assert body["bands"] == {"medium_from": fusion.MEDIUM_RISK_FROM, "high_from": fusion.HIGH_RISK_FROM}
 
 
 def test_history_lists_diagnoses_and_alerts_newest_first(client, db_session):

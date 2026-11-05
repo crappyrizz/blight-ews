@@ -4,6 +4,8 @@
 // becomes "not known" in the app, never a crash. Missing data is shown as
 // missing, never as "low risk" (the project's missing-data rule).
 
+import 'dart:math' as math;
+
 class Farmer {
   Farmer({required this.farmerId, required this.name, required this.phoneNumber, this.farmId});
 
@@ -296,11 +298,14 @@ class HistoryItem {
 }
 
 class History {
-  History(this.items);
+  History(this.items, {this.trend});
 
   /// Newest first. Under each day, that day's weather risk comes first (it is
   /// dated at the end of the day), then the day's photos and SMS, newest first.
   final List<HistoryItem> items;
+
+  /// The same days as a chart: what the model forecast against what was measured.
+  final Trend? trend;
 
   factory History.fromJson(Map<String, dynamic> j) {
     final items = <HistoryItem>[];
@@ -345,9 +350,120 @@ class History {
       ));
     }
     items.sort((a, b) => b.when.compareTo(a.when));
-    return History(items);
+    return History(items, trend: Trend.fromJson(j));
   }
 }
+
+// --- trend: what the risk model is doing over time ---------------------------------
+
+/// One day on the trend chart.
+class TrendPoint {
+  TrendPoint({required this.day, this.measured, this.forecast});
+
+  final DateTime day;
+
+  /// That day's blight weather from the sensor (Hutton score: 0, 0.5 or 1); null when not judged.
+  final double? measured;
+
+  /// The learned model's 24 h forecast FOR this day, made from the day before's readings; null when none.
+  final double? forecast;
+}
+
+class Trend {
+  Trend({required this.points, required this.mediumFrom, required this.highFrom});
+
+  /// Oldest first, one per day up to today, then tomorrow (which has only a forecast).
+  final List<TrendPoint> points;
+  final double mediumFrom;
+  final double highFrom;
+
+  /// Built from the history response. The 24 h forecast stored under day D
+  /// was made from D's readings and is about D + 1, so it is placed on D + 1.
+  static Trend? fromJson(Map<String, dynamic> j) {
+    final measured = <DateTime, double?>{};
+    final issued = <DateTime, double?>{};
+    for (final r in (j['risk'] as List?) ?? const []) {
+      final m = r as Map<String, dynamic>;
+      final day = DateTime.parse(m['for_date'] as String);
+      final sensor = (m['hutton'] as Map?)?['sensor'] as Map?;
+      measured[day] = (sensor?['score'] as num?)?.toDouble();
+      issued[day] = ((((m['learned'] as Map?)?['p24'] as Map?)?['sensor']) as num?)?.toDouble();
+    }
+    if (measured.isEmpty) return null;
+    final days = measured.keys.toList()..sort();
+    final points = [
+      for (final day in days)
+        TrendPoint(day: day, measured: measured[day], forecast: issued[_addDays(day, -1)]),
+    ];
+    final today = days.last;
+    points.add(TrendPoint(day: _addDays(today, 1), forecast: issued[today]));
+    final bands = (j['bands'] as Map?) ?? const {};
+    return Trend(
+      points: points,
+      mediumFrom: (bands['medium_from'] as num?)?.toDouble() ?? 0.33,
+      highFrom: (bands['high_from'] as num?)?.toDouble() ?? 0.66,
+    );
+  }
+
+  RiskLevel band(double score) =>
+      score >= highFrom ? RiskLevel.high : (score >= mediumFrom ? RiskLevel.medium : RiskLevel.low);
+
+  /// Up to today (tomorrow has nothing measured yet).
+  List<TrendPoint> get past => points.sublist(0, points.length - 1);
+
+  TrendPoint get tomorrow => points.last;
+
+  /// The trend in plain sentences, for the farmer and for screen readers.
+  String get summary {
+    final sentences = <String>[];
+    final judged = past.where((p) => p.measured != null).toList();
+
+    // Direction: the last 7 days against the 7 before, if each has enough judged days.
+    final lastWeek = _mean(past.skip(math.max(0, past.length - 7)));
+    final weekBefore = _mean(past.take(math.max(0, past.length - 7)).skip(math.max(0, past.length - 14)));
+    if (lastWeek == null || weekBefore == null) {
+      sentences.add('Too few days with full sensor readings yet to tell which way the risk is going.');
+    } else if (lastWeek - weekBefore >= 0.15) {
+      sentences.add('Blight weather has become more frequent over the last week.');
+    } else if (weekBefore - lastWeek >= 0.15) {
+      sentences.add('Blight weather has become less frequent over the last week.');
+    } else {
+      sentences.add('Blight weather in the last week was about the same as the week before.');
+    }
+
+    if (judged.isNotEmpty) {
+      final blightDays = judged.where((p) => p.measured! >= 0.5).toList();
+      sentences.add(blightDays.isEmpty
+          ? 'No blight weather on any of the ${judged.length} days with full readings.'
+          : 'Blight weather on ${blightDays.length} of the ${judged.length} days with full readings, '
+              'most recently on ${shortDate(blightDays.last.day)}.');
+    }
+
+    final next = tomorrow.forecast;
+    sentences.add(next == null
+        ? 'No forecast for tomorrow yet.'
+        : "The model's forecast for tomorrow: ${percent(next)} (${_bandWord(band(next))}).");
+
+    final compared = past.where((p) => p.measured != null && p.forecast != null).toList();
+    if (compared.isNotEmpty) {
+      final same = compared.where((p) => band(p.forecast!) == band(p.measured!)).length;
+      sentences.add('On $same of ${compared.length} days, the forecast was in the same band '
+          'as the weather that followed.');
+    }
+    return sentences.join(' ');
+  }
+
+  /// Mean measured score, or null when fewer than 3 days were judged.
+  static double? _mean(Iterable<TrendPoint> days) {
+    final scores = days.map((p) => p.measured).whereType<double>().toList();
+    if (scores.length < 3) return null;
+    return scores.reduce((a, b) => a + b) / scores.length;
+  }
+}
+
+DateTime _addDays(DateTime d, int days) => DateTime(d.year, d.month, d.day + days);
+
+String _bandWord(RiskLevel level) => riskLabel(level).replaceAll(' RISK', '').toLowerCase();
 
 // --- symptom onset reports ------------------------------------------------------------
 

@@ -1,11 +1,13 @@
 // History (FR viii): the last 30 days, newest first, mixing leaf photos, SMS
-// alerts and each day's weather risk, grouped by day.
+// alerts and each day's weather risk, grouped by day. On top, the trend card:
+// the same days as a chart of what the risk model forecast against what was measured.
 
 import 'package:flutter/material.dart';
 
 import 'api.dart';
 import 'main.dart';
 import 'models.dart';
+import 'trend_chart.dart';
 import 'widgets.dart';
 
 const historyDays = 30;
@@ -74,6 +76,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final text = Theme.of(context).textTheme;
     final rows = <Widget>[
       if (_error != null) ...[ErrorBox(message: _error!, onRetry: _load), const SizedBox(height: 16)],
+      if (_history?.trend != null) TrendCard(trend: _history!.trend!),
     ];
     final items = _history?.items ?? const <HistoryItem>[];
     if (items.isEmpty && _error == null) {
