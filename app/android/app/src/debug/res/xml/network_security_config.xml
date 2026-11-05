@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG BUILDS ONLY (flutter run): allows plain HTTP, so a phone can reach a
+  backend running on the developer's PC over the local network
+  (flutter run -dart-define=API_BASE_URL=http://<PC LAN IP>:8000).
+
+  Android uses this file instead of src/main/res/xml/network_security_config.xml
+  in debug builds only. The release APK that farmers install uses the main one,
+  which refuses plain HTTP: the hosted API is HTTPS.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

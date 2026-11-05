@@ -10,28 +10,59 @@ Student: Edgar Kareithi (164951). Supervisor: Juliet Kirui.
 An early-warning system for potato late blight on one smallholder farm in Kinangop (Nyandarua, Kenya). A sensor node on the plot logs temperature and humidity; the backend turns those readings into a daily blight-weather risk (the Hutton Criteria, plus a learned 24 h / 48 h forecast); the farmer photographs a leaf in the Flutter app and a CNN on the server classifies it; the weather risk moves the CNN's late-blight threshold (fusion); and the farmer is told by SMS. Everything is framed as **decision support, never instructions**: the farmer has said he will not act on an unproven system, so the system explains itself and lets him decide.
 
 ```
-ESP32 + SHT31 node ──POST /nodes/{id}/readings──▶  FastAPI backend  ◀──JWT──  Flutter app (Android)
- (simulator until the                              │  hutton.py      Hutton day / period per local day      │ capture leaf, dashboard,
-  hardware arrives)                                │  risk_model.py  learned 24 h / 48 h forecast           │ diagnosis, history, report
-                                                   │  risk_job.py    hourly: score every node, alert        │
- Open-Meteo ERA5-Land archive ──ml/fetch_weather──▶│  cnn_service.py TFLite CNN, server side ◀──POST /images─┘
-                                                   │  fusion.py      tau(r): risk moves the late-blight bar
-                                                   │  alerts.py      SMS policy ──▶ Africa's Talking ──▶ farmer's phone
-                                                   └─ PostgreSQL (10 tables)
+ESP32 + DHT22 node ──POST /readings (HTTPS)──▶ FastAPI backend on Render                             ◀─HTTPS, JWT─ Flutter app (APK)
+ (node-01, plus Wokwi                          │  hutton.py       Hutton day / period per local day   │ dashboard + warnings,
+  and a simulator for tests)                   │  risk_model.py   learned 24 h / 48 h forecast        │ leaf check (1-3 photos),
+                                               │  risk_job.py     hourly: score every node, alert     │ history + trend, report,
+                                               │  dashboard.py    risk, forecast, warnings, history   │ admin status
+ Open-Meteo ERA5-Land ──ml/fetch_weather──▶    │  cnn_service.py  TFLite CNN; scan.py: 1-3 photos     │ ◀─POST /scans
+                                               │  fusion.py       tau(r): risk moves the bar
+                                               │  alerts.py       SMS ──▶ Africa's Talking ──▶ farmer
+                                               │  events.py, status.py  problem log, admin status
+                                               └─ PostgreSQL on Neon (11 tables)
 ```
 
 ## Architecture
 
-![System architecture (Figure 4.11)](docs/architecture.png)
+```mermaid
+flowchart LR
+  subgraph Field
+    node["ESP32 + DHT22 node<br/>(node-01; Wokwi; simulator)"]
+  end
+  subgraph Render["Render (free web service)"]
+    api["FastAPI API"]
+    job["Hourly risk job<br/>Hutton + learned 24/48 h"]
+    cnn["TFLite CNN<br/>+ fusion tau(r)"]
+    status["Problem log,<br/>admin status, warnings"]
+  end
+  db[("PostgreSQL on Neon<br/>11 tables")]
+  app["Flutter app<br/>(signed APK)"]
+  at["Africa's Talking<br/>SMS"]
+  wx["Open-Meteo<br/>ERA5-Land"]
+  gh["GitHub Actions<br/>tests + APK release"]
+  colab["Colab / PC<br/>model training"]
+  node -- "POST /readings, HTTPS, device key" --> api
+  app -- "HTTPS, JWT: dashboard, scans, history, status" --> api
+  api --- job
+  api --- cnn
+  api --- status
+  api <--> db
+  job -- "high-risk, diagnosis, status SMS" --> at
+  at -- SMS --> farmer(("Farmer"))
+  wx -- "ml/fetch_weather" --> db
+  gh -- "new APK + version.json" --> app
+  colab -- "models/" --> api
+```
 
-*Figure 4.11: system architecture.* The four layers:
+*System architecture as built (the report's Figure 4.11 shows the design).* The layers:
 
 | Layer | What runs there | Code |
 |---|---|---|
-| Field | ESP32 + SHT31 node: samples, buffers offline, uploads batches with its own key | `docs/firmware_contract.md`; `tools/simulate_node.py` until the hardware exists |
-| Backend | FastAPI API, the hourly risk job (APScheduler), the TFLite CNN, fusion, SMS | `backend/` |
-| Data | PostgreSQL: readings, weather, risk scores, images, diagnoses, alerts, symptom reports | `backend/models.py`, `alembic/` |
-| Farmer | Flutter app (Android) and SMS | `app/`, `backend/alerts.py` |
+| Field | ESP32 DevKit + DHT22 node (node-01): measures, buffers up to 7 days in flash while offline, uploads batches over HTTPS with its own key and checks the server's certificate. Wokwi and `tools/simulate_node.py` stand in for it in tests and demos | `firmware/blight_node/`, `docs/firmware_contract.md` |
+| Backend | FastAPI on Render: the API, the hourly risk job (APScheduler), the TFLite CNN and multi-photo scans, fusion, SMS, the problem log and status | `backend/` |
+| Data | PostgreSQL 18 on Neon (local PostgreSQL for development): readings, weather, risk scores, images, diagnoses, alerts, symptom reports, system events | `backend/models.py`, `alembic/` |
+| Farmer and admin | Flutter app (Android, signed APK with in-app updates) and SMS; admins also get the Status tab | `app/`, `backend/alerts.py` |
+| Operations | GitHub Actions: lint and tests on every push and PR; a signed APK published on every merge that touches the app. Render redeploys on every merge to `main` | `.github/workflows/` |
 
 Training happens off the server: the CNN in Google Colab (`ml/train_cnn.ipynb`), the risk model on the PC (`ml/train_risk.py`). The backend only loads the saved models from `models/`.
 
@@ -173,11 +204,14 @@ cd app; flutter analyze; flutter test; cd ..      # the app
 
 ## Known limitations
 
-- **Simulated sensor data until the hardware exists.** Every "sensor" reading so far comes from `tools/simulate_node.py` replaying Open-Meteo weather with a canopy offset, not from the ESP32. Results built on it (the sensor-vs-API comparison, the dashboard) describe the simulator, and the reports say so in a banner. The readings stored before 12 Oct 2026 were replayed from ECMWF IFS data, before the archive was pinned to ERA5-Land.
+- **One real node, still on the bench.** node-01 (ESP32 + DHT22) has uploaded real readings since 29 Oct 2026, but from the lab, not the plot, and on USB power without an enclosure. The sensor-vs-API comparison and the dashboard figures in `docs/` were produced from `tools/simulate_node.py` (replayed Open-Meteo weather with a canopy offset), and the reports say so in a banner. The readings stored before 12 Oct 2026 were replayed from ECMWF IFS data, before the archive was pinned to ERA5-Land. On the lab build the OLED and the Offline button did not work (both are shown working in Wokwi; see `firmware/blight_node/README.md`).
 - **The learned model forecasts Hutton conditions, not blight onset.** Its targets are Hutton days and periods computed from weather; there is no disease ground truth yet. The farmer's symptom-onset reports (`symptom_reports`) are the data that could link the two. The cost analysis treats a Hutton period as an infection, which overstates misses when no inoculum is present.
-- **Very few field images.** The CNN scores 99.4 % on PlantVillage lab images (single leaves, plain backgrounds); no field photos from the farm are registered yet, so its accuracy on real field photos is unmeasured. It is overconfident on unusual photos (before the centre-crop fix, a squashed photo of an early-blight leaf on a laptop screen came out 100 % late blight), which is what fusion and the quality check guard against.
+- **No field images yet.** The CNN scores 99.4 % on PlantVillage lab images (single leaves, plain backgrounds), but its accuracy on real field photos is unmeasured: `data/field_images/` is still empty, and the one real early-blight leaf photographed so far came out late blight (99.6 %). The quality check, averaging 1-3 photos per leaf, and fusion limit the damage; retraining on field photos is the fix.
 - **One farm, one node, one test year.** All risk numbers come from one location and one held-out year of weather.
-- **Development settings.** The app talks to the API over plain HTTP on the local network (`network_security_config.xml`); production needs HTTPS. SMS uses the Africa's Talking sandbox.
+- **Free hosting.** The Render service sleeps after 15 quiet minutes (the first request then takes about a minute, and the hourly job runs only while it is awake), and its disk is wiped on every redeploy, so uploaded photo FILES do not survive one (their rows, predictions and diagnoses stay in Neon). Neon's free tier bounds storage and compute.
+- **Weather history is not refreshed automatically.** `ml/fetch_weather` is run by hand, so the API-based scores fall behind; the admin Status tab says how far.
+- **SMS via the Africa's Talking sandbox.** Messages reach the sandbox simulator, not real phones; going live needs a funded Africa's Talking account (and a sender ID).
+- **Android only, outside the Play Store.** The app is handed over as a signed APK that updates itself from GitHub releases (see App updates); there is no iOS build.
 
 ---
 
@@ -194,7 +228,7 @@ The farmer grows the Shangi variety, prefers SMS, has a smartphone, and has weak
 
 ## Components
 
-1. **Sensor ingest**: ESP32 + SHT31 node (hardware comes LATER). Until then, `tools/simulate_node.py` replays real hourly weather into the same ingest endpoint using the exact JSON contract the firmware will use.
+1. **Sensor ingest**: ESP32 + DHT22 node (`firmware/blight_node/`; an SHT31 is supported by one setting). `tools/simulate_node.py` replays real hourly weather into the same ingest endpoint with the same JSON contract, for tests and demos.
 2. **Hutton Criteria risk (baseline)**:
    - A "Hutton day" = local calendar day (Africa/Nairobi) with min temperature >= 10.0 °C AND at least 6 hours with relative humidity >= 90%.
    - A "Hutton period" = two consecutive Hutton days (flagged on the second day).
@@ -207,7 +241,8 @@ The farmer grows the Shangi variety, prefers SMS, has a smartphone, and has weak
    `tau(r) = clip(tau0 - k*(r - 0.5), tau_min, tau_max)`.
    High risk lowers the bar, low risk raises it.
 6. **SMS alerts** via Africa's Talking (sandbox during development).
-7. **Flutter mobile app**: login, dashboard, leaf capture, diagnosis result, history, report symptom onset date.
+7. **Flutter mobile app**: login, dashboard (with warnings), guided leaf check from 1-3 photos, diagnosis result, history with the trend chart, report symptom onset date; admins also get the system Status tab.
+8. **Error reporting**: problems written to the database in plain words (`system_events`), an admin status page, and warnings for the farmer (see Errors and system status).
 
 ## Stack
 
@@ -221,14 +256,15 @@ Keep it FLAT; do not add nested sub-packages unless asked.
 
 ```
 backend/   FastAPI app: app.py, config.py, db.py, models.py, schemas.py, auth.py, ids.py,
-           ingest.py, hutton.py, risk_model.py, risk_job.py, cnn_service.py, fusion.py,
-           alerts.py, sms.py, tests/
+           ingest.py, hutton.py, risk_model.py, risk_job.py, dashboard.py, cnn_service.py,
+           scan.py, fusion.py, alerts.py, sms.py, events.py, status.py, tests/
 ml/        fetch_weather.py, build_features.py, train_risk.py, eval_risk.py, train_cnn.ipynb,
            eval_cnn.py, compare_sensor_vs_api.py, cost_threshold.py, make_test_plan.py,
            run_all_evals.py
-tools/     simulate_node.py, seed.py
+tools/     simulate_node.py, seed.py, seed_demo_event.py, register_device.py, rescore.py,
+           set_password.py, set_app_signing_secrets.py, fetch_models.py, watch_readings.py
 app/       Flutter project
-firmware/  (later)
+firmware/  blight_node/ (the ESP32 sketch), diagnostics/ (lab test sketches)
 models/    cnn.tflite, labels.txt, risk_model_24h.joblib, risk_model_48h.joblib
 data/      gitignored: raw weather, images, uploads
 docs/      evaluation outputs (tables/figures) for Chapter 5
@@ -236,18 +272,19 @@ docs/      evaluation outputs (tables/figures) for Chapter 5
 
 ## Database
 
-10 tables; string IDs with prefixes (e.g. `FRM-xxxx`, `RD-xxxx`).
+11 tables; string IDs with prefixes (e.g. `FRM-xxxx`, `RD-xxxx`).
 
 - **farmers**(farmer_id PK, name, phone_number UNIQUE, password_hash, role ['farmer'|'admin'], farm_id, created_at)
 - **sensor_nodes**(node_id PK, farmer_id FK, location, latitude, longitude, last_sync_time, api_key_hash, last_risk_level, created_at): the sensor devices
 - **sensor_readings**(reading_id PK, node_id FK, temperature, humidity, leaf_wetness NULLABLE, timestamp; UNIQUE(node_id, timestamp))
 - **weather_readings**(weather_id PK, latitude, longitude, source ['archive'|'historical_forecast'|'forecast'], timestamp, temperature, humidity, forecast_issued_at NULLABLE; UNIQUE(source, latitude, longitude, timestamp, forecast_issued_at))
-- **risk_scores**(score_id PK, node_id FK, method ['hutton'|'learned'], data_source ['sensor'|'api'], horizon_hours [0|24|48], status ['ok'|'insufficient_data'|'no_data'], score FLOAT 0-1 NULLABLE, valid_hours INT NULL, hutton_day BOOL NULL, hutton_period BOOL NULL, model_version NULL, for_date DATE, computed_at)
-- **leaf_images**(image_id PK, farmer_id FK, file_path, capture_date)
+- **risk_scores**(score_id PK, node_id FK, method ['hutton'|'learned'], data_source ['sensor'|'api'], horizon_hours [0|24|48], status ['ok'|'insufficient_data'|'no_data'], score FLOAT 0-1 NULLABLE, valid_hours INT NULL, hutton_day BOOL NULL, hutton_period BOOL NULL, model_version NULL, for_date DATE, computed_at; UNIQUE(node_id, method, data_source, horizon_hours, for_date))
+- **leaf_images**(image_id PK, farmer_id FK, file_path, capture_date, first_image_id FK NULL (a scan's 2nd/3rd photo points to its 1st), probabilities JSON NULL (this photo's own CNN output))
 - **diagnosis_results**(result_id PK, image_id FK UNIQUE, disease_label, confidence, probabilities JSON, risk_score_used FLOAT, threshold_used FLOAT, risk_level ['low'|'medium'|'high'], late_blight_flagged BOOL, risk_basis ['learned_24h'|'hutton_today'|'hutton_fallback'|'neutral_prior'], risk_for_date DATE NULL, timestamp)
 - **reading_contributions**(reading_id FK, result_id FK, composite PK)
 - **alerts**(alert_id PK, node_id FK, result_id FK NULLABLE, risk_score_id FK NULLABLE, alert_type ['high_risk'|'diagnosis'|'low_risk'], message TEXT, sent_at, delivery_status, provider_message_id)
 - **symptom_reports**(report_id PK, farmer_id FK, node_id FK, onset_date DATE, notes, reported_at)
+- **system_events**(event_id PK, occurred_at, source, severity ['info'|'warning'|'error'], code, message TEXT, node_id NULL, farmer_id NULL): the problem log; node_id / farmer_id are plain labels, not foreign keys
 
 All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for daily aggregation and display.
 
@@ -317,7 +354,7 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 
 ## Sensor ingest (FR ii)
 
-- `POST /nodes/{node_id}/readings` takes a **batch** (max 500) and authenticates with the node's own `X-Node-Key` header, never a farmer JWT. Replaying a batch is harmless: a duplicate `(node_id, timestamp)` is skipped via `INSERT … ON CONFLICT DO NOTHING` and counted as a duplicate, not an error. Out-of-order and old timestamps are accepted, since the node buffers while offline. Rows are validated one by one (temperature -40…85 °C, the SHT31's own range; humidity 0…100%; timestamp no more than 5 minutes in the future, timezone required) and rejects are reported by position, so one bad reading does not cost the node its buffer. Response: `{"accepted": n, "duplicates": n, "rejected": [{"index": i, "reason": "…"}]}`. `last_sync_time` records when the node was last heard from (last seen), not the newest reading; `created_at` when it was registered.
+- `POST /nodes/{node_id}/readings` takes a **batch** (max 500) and authenticates with the node's own `X-Node-Key` header, never a farmer JWT. Replaying a batch is harmless: a duplicate `(node_id, timestamp)` is skipped via `INSERT … ON CONFLICT DO NOTHING` and counted as a duplicate, not an error. Out-of-order and old timestamps are accepted, since the node buffers while offline. Rows are validated one by one (temperature -40…85 °C, a plausibility range far wider than the plot's weather; humidity 0…100%; timestamp no more than 5 minutes in the future, timezone required) and rejects are reported by position, so one bad reading does not cost the node its buffer. Response: `{"accepted": n, "duplicates": n, "rejected": [{"index": i, "reason": "…"}]}`. `last_sync_time` records when the node was last heard from (last seen), not the newest reading; `created_at` when it was registered.
 - `POST /readings` is the same ingest in a flatter shape for the ESP32: `X-Device-Key`, a body of one reading or a list, each `{"device_id", "ts", "temp_c", "rh"}` (the device ID is the node ID). Same tables, limits and duplicate handling; the reply is `{"stored", "skipped", "rejected", "risk_level"}`, where `risk_level` comes from `fusion.resolve_risk` (as last scored by the hourly job) and is `unknown` when there is too little history. A node is a "device" here: there is no separate devices table, so the risk layer sees these readings unchanged.
 - `GET /nodes/{node_id}/readings?from=&to=` uses a farmer JWT and the ownership rule; `from` inclusive, `to` exclusive, ordered by time.
 - **Registering a device:** `.\dev.ps1 register-device node-01 "Bench node A" --key-file device_keys.local.env` creates the node (owned by the admin account unless `--owner-phone` names a farmer, at the farm site unless `--latitude/--longitude`), stores only the hash of a fresh 32-byte key, prints the raw key once, and refuses a device_id that already exists. `*.local.env` files are gitignored and blocked by the pre-commit hook.
@@ -421,12 +458,12 @@ Notes on the image export:
 
 ## Mobile app (app/, Flutter, Android)
 
-Flat layout: `lib/main.dart` (theme, start screen), `lib/api.dart` (every backend call, the login token in `flutter_secure_storage`, errors turned into plain sentences, and no exception other than `ApiException` ever escaping), `lib/models.dart`, `lib/widgets.dart`, and one file per screen: `login_screen.dart`, `register_screen.dart`, `home_screen.dart` (bottom navigation: Home, Scan, History, Report), `dashboard_screen.dart` (with "Send me a status SMS"), `scan_screen.dart` (guided leaf check: up to 3 photos of the same leaf, whole leaf / worst spot close-up / another angle, each from camera or gallery, sent together to `POST /scans`; a rejected photo is marked in its own slot for a retake; 1 photo is enough, 3 is most reliable; the underside is a tip, not scored, as the CNN never saw one), `diagnosis_screen.dart` (the CNN result, flag, risk, what each photo of a scan showed and whether they agreed, and the r/tau reasoning on tap), `history_screen.dart` (the last 30 days, with the trend card from `trend_chart.dart` on top) and `report_screen.dart` (symptom onset date, no future days).
+Flat layout: `lib/main.dart` (theme, start screen), `lib/api.dart` (every backend call, the login token in `flutter_secure_storage`, errors turned into plain sentences, and no exception other than `ApiException` ever escaping), `lib/models.dart`, `lib/widgets.dart`, and one file per screen: `login_screen.dart`, `register_screen.dart`, `home_screen.dart` (bottom navigation: Home, Scan, History, Report, and Status for admins; the update strip), `dashboard_screen.dart` (with "Send me a status SMS"), `scan_screen.dart` (guided leaf check: up to 3 photos of the same leaf, whole leaf / worst spot close-up / another angle, each from camera or gallery, sent together to `POST /scans`; a rejected photo is marked in its own slot for a retake; 1 photo is enough, 3 is most reliable; the underside is a tip, not scored, as the CNN never saw one), `diagnosis_screen.dart` (the CNN result, flag, risk, what each photo of a scan showed and whether they agreed, and the r/tau reasoning on tap), `history_screen.dart` (the last 30 days, with the trend card from `trend_chart.dart` on top) and `report_screen.dart` (symptom onset date, no future days), `status_screen.dart` (admins: the system status) and `update.dart` (the in-app update check).
 
 - **Trend (History screen):** a bar per day for the blight weather the sensor measured (Hutton score; nothing on a day without full readings), the learned model's 24 h forecast for each day as a dashed line (placed on the day it was about, so the two can be compared), tomorrow's forecast as the last point, over the server's low / moderate / high bands. Under it, the same in sentences: which way the last week went, how many blight-weather days, tomorrow's forecast, and on how many days the forecast landed in the same band as the weather that followed. Drawn with a `CustomPainter`, no chart package.
 
 - **Server address:** the single constant `apiBaseUrl` in `lib/api.dart`. By default it is the hosted server, `https://blight-ews-api.onrender.com` (see Deployment), so a plain `flutter build apk` works from any network. Requests wait up to 75 s, because the free Render server takes about a minute to wake after 15 quiet minutes. For a backend on the PC, override it without editing: `flutter run --dart-define=API_BASE_URL=http://<PC-IP>:8000`. From the Android emulator, the PC is `http://10.0.2.2:8000`.
-- **Plain HTTP is allowed for development only** (`android/app/src/main/res/xml/network_security_config.xml`). Remove it for production and serve the API over HTTPS.
+- **Plain HTTP in debug builds only.** `android/app/src/debug/res/xml/network_security_config.xml` allows it, so `flutter run` can reach a backend on the PC; the release APK uses `src/main/res/xml/network_security_config.xml`, which refuses it (the hosted API is HTTPS).
 - Flutter SDK at `C:\src\flutter` (on the user PATH); Android Studio's JDK (`flutter config --jdk-dir`).
 
 ```powershell
