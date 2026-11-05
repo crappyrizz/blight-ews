@@ -431,6 +431,21 @@ adb reverse tcp:8000 tcp:8000
 flutter run --dart-define=API_BASE_URL=http://127.0.0.1:8000
 ```
 
+## App updates (signed APK, no Play Store)
+
+The app is handed over as an APK, not through Google Play. Server changes reach phones by themselves (Render redeploys on every merge); changes to the app's screens need a new APK, and this makes that a tap:
+
+1. **Every merge to `main` that touches `app/`** runs `.github/workflows/app-release.yml`: `flutter analyze`, `flutter test`, then a signed release APK, published with `version.json` to the GitHub release **`app-latest`** (marked "not latest", so the models release keeps that place). Build numbers are 100 + the workflow run number, so they only go up.
+   - APK: https://github.com/crappyrizz/blight-ews/releases/download/app-latest/blight-ews.apk
+2. **When the app opens** (`lib/update.dart`) it reads `version.json`; if that build is newer than its own, a strip above the tabs says "A new version of the app is ready" with **Update**. Update opens the APK in the browser; Android asks to confirm the install (once, it also asks to allow installs from the browser). No answer from GitHub just means no strip. Builds made on the PC have build number 0 and never ask.
+3. **Signing:** Android installs an update only when it is signed with the same key as the installed app. The release key is `C:\Users\CHEWBACCA\.android-keys\blight-ews-upload.jks`, named in `app/android/key.properties` (gitignored); with it, release builds on the PC are signed the same way as GitHub's. GitHub gets it as three repository secrets, set once with:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m tools.set_app_signing_secrets    # needs gh logged in as the repo owner
+   ```
+
+   **Back up the keystore and `key.properties`** (USB stick, password manager): GitHub secrets cannot be read back, and an app signed with a lost key can never be updated, only uninstalled and reinstalled. A phone that has a build signed with another key (e.g. the debug key from `flutter run`) must uninstall it once before installing a release build.
+
 ## Continuous integration
 
 [.github/workflows/tests.yml](.github/workflows/tests.yml) runs on every push to `main` and every pull request, as two jobs:

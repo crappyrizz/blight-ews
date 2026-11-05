@@ -2,6 +2,7 @@
 // bottom: Home, Scan, History, Report. A farmer with more than one sensor (e.g.
 // the plot node plus a simulated or demo node) gets a picker above the tabs;
 // every tab then shows, and sends photos and reports for, the chosen sensor.
+// When a newer build of the app has been published, a strip above the tabs offers it.
 
 import 'package:flutter/material.dart';
 
@@ -12,6 +13,7 @@ import 'main.dart';
 import 'models.dart';
 import 'report_screen.dart';
 import 'scan_screen.dart';
+import 'update.dart';
 import 'widgets.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -30,11 +32,15 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _farmId;
   String? _error;
   int _historyVersion = 0; // bumped after a new diagnosis or report, to refresh History
+  AppUpdate? _update; // a newer build of the app, until the farmer closes the strip
 
   @override
   void initState() {
     super.initState();
     _loadPlot();
+    checkForUpdate().then((update) {
+      if (mounted) setState(() => _update = update);
+    });
   }
 
   Future<void> _loadPlot() async {
@@ -159,6 +165,7 @@ class _HomeScreenState extends State<HomeScreen> {
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (_update != null) UpdateBanner(update: _update!, onClose: () => setState(() => _update = null)),
           ?picker,
           NavigationBar(
             selectedIndex: _tab,
