@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from backend import alerts, cnn_service, events, risk_job
+from backend import alerts, cnn_service, events, risk_model
 from backend.config import settings
 from backend.models import Alert, Farmer, SensorNode, SystemEvent, WeatherReading
 
@@ -35,6 +35,16 @@ def ago(delta: timedelta) -> str:
     if hours < 48:
         return f"{hours} hour{'s' if hours != 1 else ''}"
     return f"{hours // 24} days"
+
+
+def _learned_model_present() -> bool:
+    """Whether the learned model loads. Only looks: reading the status must never write an
+    event (risk_job.learned_model_available() records one when the model is missing)."""
+    try:
+        risk_model.load_models()
+        return True
+    except FileNotFoundError:
+        return False
 
 
 def _check(name: str, state: str, message: str) -> dict:
@@ -160,7 +170,7 @@ def admin_status(session: Session, now: datetime | None = None) -> dict:
             _check("leaf_checker", ERROR, "The CNN is not loaded (models/cnn.tflite or labels.txt missing on "
                                           "the server), so leaf photos are refused. Run tools/fetch_models.py."))
     learned = (_check("learned_model", OK, "The learned 24/48 h model is loaded.")
-               if risk_job.learned_model_available() else
+               if _learned_model_present() else
                _check("learned_model", WARNING, "The learned 24/48 h model is missing: only the Hutton rule "
                                                 "is scoring, and the forecast is not shown."))
     checks = [

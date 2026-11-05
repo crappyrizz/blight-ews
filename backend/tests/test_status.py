@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 from test_alerts import TODAY, FakeATSMS, make_node
 
-from backend import alerts, auth, cnn_service, events, risk_job, sms
+from backend import alerts, auth, cnn_service, events, risk_job, risk_model, sms
 from backend import status as system_status
 from backend.app import app
 from backend.config import settings
@@ -209,6 +209,17 @@ def test_status_names_each_part_and_the_recent_problems(client, db_session, cnn_
     assert [p["code"] for p in body["recent_problems"]] == ["sms_not_sent"]  # routine runs are not problems
     [sensor] = [s for s in body["sensors"] if s["node_id"] == quiet.node_id]
     assert sensor["quiet"] is True and sensor["last_seen"] is None
+
+
+def test_reading_the_status_never_writes_anything(db_session, monkeypatch, cnn_loaded):
+    # As on GitHub's test machine: the learned model files are not there.
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("models/risk_24h.joblib not found")
+    monkeypatch.setattr(risk_model, "load_models", missing)
+    body = system_status.admin_status(db_session)
+    learned = next(c for c in body["checks"] if c["name"] == "learned_model")
+    assert learned["status"] == "warning" and "missing" in learned["message"]
+    assert stored(db_session) == []  # a status page that writes would report its own reading
 
 
 def test_a_failed_run_and_a_missing_leaf_checker_are_errors(db_session, monkeypatch):
