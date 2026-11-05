@@ -1,0 +1,97 @@
+name: app release
+
+# Every merge to main that changes the app builds a signed APK and publishes it,
+# with version.json, to the GitHub release "app-latest", at fixed addresses:
+#   https://github.com/crappyrizz/blight-ews/releases/download/app-latest/blight-ews.apk
+#   https://github.com/crappyrizz/blight-ews/releases/download/app-latest/version.json
+# The app reads version.json when it opens and offers the update when the build
+# number there is higher than its own (lib/update.dart).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/app-release.yml"
+  workflow_dispatch: # "Run workflow" on GitHub: rebuild without a change
+
+permissions:
+  contents: write # create the release
+
+concurrency:
+  group: app-release
+  cancel-in-progress: false # two quick merges: build both, the later one ends up published
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    env:
+      # Build numbers only ever go up (Android refuses to "update" to a lower one). 100 + the
+      # run number keeps them above the pubspec's +1 used by builds on the PC.
+      BUILD: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.7 # the same Flutter as the development PC
+          cache: true
+
+      - name: Build number
+        run: echo "BUILD=$((100 + BUILD))" >> "$GITHUB_ENV"
+
+      - name: Signing key (from the repository secrets)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::No signing key: run tools/set_app_signing_secrets.py once (see README, App updates)."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          {
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyPassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storeFile=$RUNNER_TEMP/upload.jks"
+          } > android/key.properties
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+      - name: Build the APK
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed -E 's/version: *([^+]*).*/\1/')
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          flutter build apk --release --build-name="$VERSION" --build-number="$BUILD" \
+            --dart-define=APP_BUILD="$BUILD"
+          cp build/app/outputs/flutter-apk/app-release.apk "$RUNNER_TEMP/blight-ews.apk"
+          printf '{"build": %s, "version": "%s", "commit": "%s", "built_at": "%s"}\n' \
+            "$BUILD" "$VERSION" "${GITHUB_SHA::7}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$RUNNER_TEMP/version.json"
+          cat "$RUNNER_TEMP/version.json"
+
+      - name: Publish to the app-latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete app-latest --cleanup-tag --yes || true
+          gh release create app-latest "$RUNNER_TEMP/blight-ews.apk" "$RUNNER_TEMP/version.json" \
+            --target "$GITHUB_SHA" --latest=false \
+            --title "App $VERSION (build $BUILD)" \
+            --notes "Android app, build $BUILD, from ${GITHUB_SHA::7}. Install on the phone from: https://github.com/${{ github.repository }}/releases/download/app-latest/blight-ews.apk"
+
+      - name: Forget the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks" android/key.properties

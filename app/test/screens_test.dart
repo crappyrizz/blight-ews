@@ -9,6 +9,7 @@ import 'package:blight_ews/api.dart';
 import 'package:blight_ews/models.dart';
 import 'package:blight_ews/report_screen.dart';
 import 'package:blight_ews/trend_chart.dart';
+import 'package:blight_ews/update.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -172,6 +173,49 @@ void main() {
       expect(find.text("Model's forecast for that day, made the day before"), findsOneWidget);
       expect(find.textContaining('more frequent over the last week'), findsOneWidget);
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('App updates', () {
+    MockClient answering(int status, String body) => MockClient((request) async {
+          expect(request.url, versionInfoUrl);
+          return http.Response(body, status);
+        });
+
+    test('a newer build on GitHub is offered', () async {
+      final update = await checkForUpdate(
+          client: answering(200, '{"build": 105, "version": "1.0.0", "commit": "abc1234"}'), currentBuild: 104);
+      expect(update?.build, 105);
+      expect(update?.version, '1.0.0');
+    });
+
+    test('the same or an older build is not', () async {
+      expect(await checkForUpdate(client: answering(200, '{"build": 104}'), currentBuild: 104), isNull);
+      expect(await checkForUpdate(client: answering(200, '{"build": 103}'), currentBuild: 104), isNull);
+    });
+
+    test('no answer, or a broken one, just means no banner', () async {
+      expect(await checkForUpdate(client: answering(404, 'Not Found'), currentBuild: 104), isNull);
+      expect(await checkForUpdate(client: answering(200, '<html>'), currentBuild: 104), isNull);
+      expect(await checkForUpdate(client: answering(200, '{"version": "1.0.0"}'), currentBuild: 104), isNull);
+      final offline = MockClient((_) async => throw const SocketException('no network'));
+      expect(await checkForUpdate(client: offline, currentBuild: 104), isNull);
+    });
+
+    test('a build made on the PC never asks', () async {
+      final never = MockClient((_) async => fail('a PC build must not check for updates'));
+      expect(await checkForUpdate(client: never, currentBuild: 0), isNull);
+      expect(appBuild, 0); // the tests are a PC build too
+    });
+
+    testWidgets('the strip names the build and can be closed', (tester) async {
+      var closed = false;
+      await tester.pumpWidget(MaterialApp(home: Scaffold(
+          body: UpdateBanner(update: AppUpdate(build: 105, version: '1.0.0'), onClose: () => closed = true))));
+      expect(find.text('A new version of the app is ready (build 105).'), findsOneWidget);
+      expect(find.text('Update'), findsOneWidget);
+      await tester.tap(find.byTooltip('Not now'));
+      expect(closed, isTrue);
     });
   });
 
