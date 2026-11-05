@@ -35,6 +35,35 @@ IconData riskIcon(RiskLevel level) => switch (level) {
       RiskLevel.unknown => Icons.help,
     };
 
+/// Something the farmer should know (amber, with an icon and words: never colour alone).
+class WarningBox extends StatelessWidget {
+  const WarningBox({super.key, required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    const amber = Color(0xFFFFF4E0);
+    final ink = riskColor(RiskLevel.medium);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: amber,
+        border: Border.all(color: ink),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.warning_amber_rounded, color: ink),
+          const SizedBox(width: 12),
+          Expanded(child: Text(message, style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.black87))),
+        ],
+      ),
+    );
+  }
+}
+
 /// A problem, in words, with an optional "Try again" button.
 class ErrorBox extends StatelessWidget {
   const ErrorBox({super.key, required this.message, this.onRetry});

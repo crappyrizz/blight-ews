@@ -52,6 +52,20 @@ def db_session():
         connection.close()
 
 
+@pytest.fixture(autouse=True)
+def events_stay_in_the_test(request, monkeypatch):
+    """backend/events.py writes in its own session: point it at this test's transaction
+    (rolled back with everything else), or, for a test without a database, only log."""
+    from backend import events
+
+    if "db_session" in request.fixturenames:
+        connection = request.getfixturevalue("db_session").bind
+        monkeypatch.setattr(events, "session_factory",
+                            lambda: Session(bind=connection, join_transaction_mode="create_savepoint"))
+    else:
+        monkeypatch.setattr(events, "session_factory", None)
+
+
 @pytest.fixture
 def client(db_session):
     """FastAPI test client whose endpoints use the test session."""

@@ -7,19 +7,37 @@
 import 'dart:math' as math;
 
 class Farmer {
-  Farmer({required this.farmerId, required this.name, required this.phoneNumber, this.farmId});
+  Farmer({required this.farmerId, required this.name, required this.phoneNumber, this.farmId, this.role = 'farmer'});
 
   final String farmerId;
   final String name;
   final String phoneNumber;
   final String? farmId;
+  final String role; // 'farmer' | 'admin'
+
+  bool get isAdmin => role == 'admin';
 
   factory Farmer.fromJson(Map<String, dynamic> j) => Farmer(
         farmerId: j['farmer_id'] as String,
         name: j['name'] as String,
         phoneNumber: j['phone_number'] as String,
         farmId: j['farm_id'] as String?,
+        role: (j['role'] as String?) ?? 'farmer',
       );
+}
+
+/// Something the farmer should know about (their sensor quiet, an SMS not
+/// delivered, leaf checking down), from the dashboard's "warnings".
+class Warning {
+  Warning({required this.code, required this.message});
+
+  final String code;
+  final String message;
+
+  static List<Warning> listFromJson(dynamic j) => [
+        for (final w in (j is List ? j : const []).whereType<Map>())
+          Warning(code: (w['code'] ?? '').toString(), message: (w['message'] ?? '').toString()),
+      ];
 }
 
 class SensorNode {
@@ -151,6 +169,7 @@ class Dashboard {
     required this.huttonToday,
     required this.outlook24,
     required this.outlook48,
+    this.warnings = const [],
   });
 
   final RiskLevel level;
@@ -161,6 +180,7 @@ class Dashboard {
   final HuttonToday huttonToday;
   final Outlook? outlook24;
   final Outlook? outlook48;
+  final List<Warning> warnings;
 
   factory Dashboard.fromJson(Map<String, dynamic> j) {
     final risk = (j['risk'] as Map<String, dynamic>?) ?? const {};
@@ -176,6 +196,7 @@ class Dashboard {
       huttonToday: HuttonToday.fromJson(j['hutton_today'] as Map<String, dynamic>?),
       outlook24: Outlook.fromJson(forecast['p24']),
       outlook48: Outlook.fromJson(forecast['p48']),
+      warnings: Warning.listFromJson(j['warnings']),
     );
   }
 }
@@ -505,3 +526,87 @@ String dayHeading(DateTime d) => '${_weekdays[d.weekday - 1]} ${shortDate(d)}';
 
 /// "14:05".
 String clockTime(DateTime d) => '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+// --- system status (admins only) -------------------------------------------------------
+
+enum CheckState { ok, warning, error }
+
+CheckState parseCheckState(String? s) => switch (s) {
+      'ok' => CheckState.ok,
+      'warning' => CheckState.warning,
+      _ => CheckState.error,
+    };
+
+/// One part of the system (database, leaf checker, risk job, ...) and how it is doing.
+class StatusCheck {
+  StatusCheck({required this.name, required this.state, required this.message});
+
+  final String name;
+  final CheckState state;
+  final String message;
+
+  /// "leaf_checker" -> "Leaf checker".
+  String get title {
+    final words = name.replaceAll('_', ' ');
+    return words.isEmpty ? words : words[0].toUpperCase() + words.substring(1);
+  }
+}
+
+class StatusSensor {
+  StatusSensor({required this.nodeId, required this.location, required this.owner, this.lastSeen, required this.quiet});
+
+  final String nodeId;
+  final String location;
+  final String owner;
+  final DateTime? lastSeen;
+  final bool quiet;
+}
+
+class StatusProblem {
+  StatusProblem({required this.when, required this.source, required this.severity, required this.message, this.nodeId});
+
+  final DateTime when;
+  final String source;
+  final CheckState severity; // warning or error
+  final String message;
+  final String? nodeId;
+}
+
+/// GET /admin/status.
+class SystemStatus {
+  SystemStatus({required this.overall, required this.checks, required this.sensors, required this.problems});
+
+  final CheckState overall;
+  final List<StatusCheck> checks;
+  final List<StatusSensor> sensors;
+  final List<StatusProblem> problems;
+
+  factory SystemStatus.fromJson(Map<String, dynamic> j) => SystemStatus(
+        overall: parseCheckState(j['overall'] as String?),
+        checks: [
+          for (final c in ((j['checks'] as List?) ?? const []).whereType<Map>())
+            StatusCheck(name: c['name'].toString(), state: parseCheckState(c['status'] as String?),
+                message: (c['message'] ?? '').toString()),
+        ],
+        sensors: [
+          for (final s in ((j['sensors'] as List?) ?? const []).whereType<Map>())
+            StatusSensor(
+              nodeId: s['node_id'].toString(),
+              location: (s['location'] ?? '').toString(),
+              owner: (s['owner'] ?? '').toString(),
+              lastSeen: DateTime.tryParse((s['last_seen'] ?? '').toString())?.toLocal(),
+              quiet: s['quiet'] == true,
+            ),
+        ],
+        problems: [
+          for (final p in ((j['recent_problems'] as List?) ?? const []).whereType<Map>())
+            StatusProblem(
+              when: DateTime.parse(p['occurred_at'] as String).toLocal(),
+              source: (p['source'] ?? '').toString(),
+              severity: parseCheckState(p['severity'] as String?),
+              message: (p['message'] ?? '').toString(),
+              nodeId: p['node_id'] as String?,
+            ),
+        ],
+      );
+}

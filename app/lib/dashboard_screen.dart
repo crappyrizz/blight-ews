@@ -133,6 +133,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return [
       if (_error != null) ...[ErrorBox(message: _error!, onRetry: _load), const SizedBox(height: 16)],
       if (d != null) ...[
+        // Problems that affect this farmer (sensor quiet, SMS not delivered, ...), first.
+        for (final w in d.warnings) ...[WarningBox(message: w.message), const SizedBox(height: 12)],
         RiskCard(dashboard: d),
         const SizedBox(height: 16),
         SummaryCard(text: d.summary),

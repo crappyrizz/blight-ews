@@ -263,3 +263,28 @@ class SymptomReport(Base):
     onset_date: Mapped[date] = mapped_column(Date)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SystemEvent(Base):
+    """Something the system ran into, in plain words (backend/events.py).
+
+    Logs vanish when the hosted server restarts; these rows stay, so the admin
+    status (GET /admin/status) can say what went wrong, when and where.
+    node_id and farmer_id are plain labels, not foreign keys: an event is
+    written in its own transaction while the risk job may hold a lock on the
+    node's row, and a foreign-key check would wait on that lock forever.
+    """
+
+    __tablename__ = "system_events"
+    __table_args__ = (
+        CheckConstraint("severity IN ('info', 'warning', 'error')", name="ck_system_events_severity"),
+    )
+
+    event_id: Mapped[str] = mapped_column(ID, primary_key=True, default=id_default(ids.SYSTEM_EVENT))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    source: Mapped[str] = mapped_column(String(20))  # risk_job | sms | cnn | api
+    severity: Mapped[str] = mapped_column(String(10))
+    code: Mapped[str] = mapped_column(String(40))  # stable, e.g. sms_not_delivered
+    message: Mapped[str] = mapped_column(Text)  # one or two plain sentences
+    node_id: Mapped[str | None] = mapped_column(ID, nullable=True)
+    farmer_id: Mapped[str | None] = mapped_column(ID, nullable=True)

@@ -11,6 +11,7 @@ import 'package:blight_ews/report_screen.dart';
 import 'package:blight_ews/scan_screen.dart';
 import 'package:blight_ews/trend_chart.dart';
 import 'package:blight_ews/update.dart';
+import 'package:blight_ews/widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -250,6 +251,62 @@ void main() {
       expect(request.fields['node_id'], 'NODE-1');
       expect(request.files.map((f) => (f.field, f.filename)), [('files', 'a.jpg'), ('files', 'b.jpg'), ('files', 'c.jpg')]);
       expect(progress.last, 1.0);
+    });
+  });
+
+  group('Readable errors and status', () {
+    test('dashboard warnings are read, and a server without them means none', () {
+      final warnings = Warning.listFromJson([
+        {'code': 'sensor_quiet', 'message': 'Your sensor has not sent readings for 5 hours.'},
+      ]);
+      expect(warnings.single.code, 'sensor_quiet');
+      expect(warnings.single.message, contains('5 hours'));
+      expect(Warning.listFromJson(null), isEmpty);
+    });
+
+    test('an admin is recognised, and an older server means a farmer', () {
+      final admin = Farmer.fromJson({'farmer_id': 'F', 'name': 'A', 'phone_number': '+2547', 'role': 'admin'});
+      final farmer = Farmer.fromJson({'farmer_id': 'F', 'name': 'B', 'phone_number': '+2547'});
+      expect(admin.isAdmin, isTrue);
+      expect(farmer.isAdmin, isFalse);
+    });
+
+    test('the system status is read part by part', () {
+      final s = SystemStatus.fromJson({
+        'overall': 'warning',
+        'checks': [
+          {'name': 'leaf_checker', 'status': 'ok', 'message': 'The CNN is loaded.'},
+          {'name': 'sensors', 'status': 'warning', 'message': '1 of 2 sensors sent readings.'},
+        ],
+        'sensors': [
+          {'node_id': 'node-02', 'location': 'Bench node B', 'owner': 'Admin', 'last_seen': null, 'quiet': true},
+        ],
+        'recent_problems': [
+          {'occurred_at': '2026-11-05T07:00:00Z', 'source': 'sms', 'severity': 'warning',
+           'message': 'An SMS for node-01 was not delivered.', 'node_id': 'node-01'},
+        ],
+      });
+      expect(s.overall, CheckState.warning);
+      expect(s.checks.map((c) => c.title), ['Leaf checker', 'Sensors']);
+      expect(s.checks.last.state, CheckState.warning);
+      expect(s.sensors.single.quiet, isTrue);
+      expect(s.sensors.single.lastSeen, isNull);
+      expect(s.problems.single.nodeId, 'node-01');
+    });
+
+    test("any other error uses the server's plain sentence", () {
+      final e = Api.explain(403, {
+        'detail': {'x': 1},
+        'error': {'code': 'not_allowed', 'message': 'Only an admin can do that.'},
+      }, '/admin/status');
+      expect(e.message, 'Only an admin can do that.');
+      expect(e.reason, 'not_allowed');
+    });
+
+    testWidgets('a warning reads plainly, with an icon', (tester) async {
+      await tester.pumpWidget(const MaterialApp(home: Scaffold(body: WarningBox(message: 'Your sensor is quiet.'))));
+      expect(find.text('Your sensor is quiet.'), findsOneWidget);
+      expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
     });
   });
 

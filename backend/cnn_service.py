@@ -291,6 +291,11 @@ def load_classifier(model_path: Path = MODEL_PATH, labels_path: Path = LABELS_PA
     return True
 
 
+def is_loaded() -> bool:
+    """Whether leaf photos can be checked right now (for the status page and warnings)."""
+    return _classifier is not None
+
+
 def get_classifier() -> CNNClassifier:
     """FastAPI dependency: the loaded model, or 503 if there is none."""
     if _classifier is None:

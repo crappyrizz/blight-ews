@@ -302,6 +302,19 @@ All timestamps stored in UTC (timestamptz); convert to Africa/Nairobi only for d
 - **Delivery reports:** `POST /sms/delivery-report` (form-encoded `id`, `status`, `failureReason`, as Africa's Talking sends them) updates `delivery_status`. Set the URL in the Africa's Talking dashboard (SMS → Callback URLs → Delivery Reports). It must be publicly reachable (e.g. through a tunnel during development); `SMS_CALLBACK_TOKEN` adds a `?token=` secret.
 - **Seeing sandbox messages:** sandbox SMS are not delivered to real phones. Open the simulator (https://simulator.africastalking.com, or *Launch Simulator* in the sandbox dashboard), enter the recipient's number (e.g. the seeded farmer, +254700000002), and the message appears in the simulated phone's SMS inbox.
 
+## Errors and system status (backend/events.py, backend/status.py)
+
+- **One error shape.** Every error the API answers keeps FastAPI's usual `detail` (so existing callers keep working) and adds `error: {"code", "message"}`: a stable code (the endpoint's own reason where it has one, e.g. `too_blurry`, `risk_high`; otherwise one per status: `not_found`, `not_logged_in`, `not_allowed`, `invalid_input`, `server_error`, ...) and one plain sentence. The app falls back to that sentence for any error it has no special wording for.
+- **The problem log (`system_events`).** Logs vanish when Render restarts the server, so problems are also written to the database, in plain words, each in its own transaction (it survives the failed work's rollback, and recording never raises):
+  - risk job: a sensor whose scoring failed (`node_scoring_failed`; the other sensors are still scored), a whole run that failed (`risk_job_failed`), the learned model missing (`learned_model_missing`), and one `info` row per completed run (`risk_job_ran`, pruned after 30 days);
+  - SMS: not sent (`sms_not_sent`) or reported undelivered by Africa's Talking (`sms_not_delivered`);
+  - startup: the leaf checker not loaded (`cnn_not_loaded`);
+  - any unexpected error behind a 500 (`server_error`, with the method, path and exception).
+
+  A problem that persists is recorded once per quiet period (e.g. once a day for a missing model), not every hour. `node_id` / `farmer_id` are plain labels without foreign keys: an event is written while the risk job may hold a lock on the node row.
+- **`GET /admin/status`** (admin only; the app's **Status** tab, shown to admins only): `overall` ok / warning / error, then one check per part with a sentence (database, leaf checker, risk job and when it last ran, learned model, SMS mode and failures in 24 h, sensors quiet for over 3 hours, how far the stored weather history reaches), every sensor's last contact, and the warnings and errors of the last 7 days.
+- **Farmers see only what affects them:** `GET /nodes/{id}/dashboard` adds `warnings` (`sensor_never_seen`, `sensor_quiet` with for how long and what to check, `sms_not_delivered`, `leaf_check_unavailable`), shown as amber boxes at the top of Home.
+
 ## Sensor ingest (FR ii)
 
 - `POST /nodes/{node_id}/readings` takes a **batch** (max 500) and authenticates with the node's own `X-Node-Key` header, never a farmer JWT. Replaying a batch is harmless: a duplicate `(node_id, timestamp)` is skipped via `INSERT … ON CONFLICT DO NOTHING` and counted as a duplicate, not an error. Out-of-order and old timestamps are accepted, since the node buffers while offline. Rows are validated one by one (temperature -40…85 °C, the SHT31's own range; humidity 0…100%; timestamp no more than 5 minutes in the future, timezone required) and rejects are reported by position, so one bad reading does not cost the node its buffer. Response: `{"accepted": n, "duplicates": n, "rejected": [{"index": i, "reason": "…"}]}`. `last_sync_time` records when the node was last heard from (last seen), not the newest reading; `created_at` when it was registered.
