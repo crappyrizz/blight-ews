@@ -16,7 +16,7 @@ as the forecast, and the summary sentence takes both into account.
 from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend import fusion, hutton
@@ -207,6 +207,12 @@ def build_history(session: Session, node: SensorNode, days: int, now: datetime |
         .where(LeafImage.farmer_id == node.farmer_id, DiagnosisResult.timestamp >= since)
         .order_by(DiagnosisResult.timestamp.desc())
     ).all()
+    # A scan's 2nd and 3rd photos point to the photo with the diagnosis.
+    extra_photos = dict(session.execute(
+        select(LeafImage.first_image_id, func.count())
+        .where(LeafImage.first_image_id.in_([d.image_id for d, _ in diagnoses]))
+        .group_by(LeafImage.first_image_id)
+    ).all()) if diagnoses else {}
     alerts = session.scalars(
         select(Alert).where(Alert.node_id == node.node_id, Alert.sent_at >= since)
         .order_by(Alert.sent_at.desc())
@@ -223,6 +229,7 @@ def build_history(session: Session, node: SensorNode, days: int, now: datetime |
             "result_id": d.result_id, "image_id": d.image_id, "timestamp": d.timestamp,
             "capture_date": captured, "disease_label": d.disease_label, "confidence": d.confidence,
             "risk_level": d.risk_level, "late_blight_flagged": d.late_blight_flagged,
+            "photo_count": 1 + extra_photos.get(d.image_id, 0),
         } for d, captured in diagnoses],
         "alerts": [{
             "alert_id": a.alert_id, "alert_type": a.alert_type, "message": a.message,

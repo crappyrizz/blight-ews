@@ -25,7 +25,18 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend import alerts, auth, cnn_service, dashboard, fusion, hutton, ids, ingest, risk_job
+from backend import (
+    alerts,
+    auth,
+    cnn_service,
+    dashboard,
+    fusion,
+    hutton,
+    ids,
+    ingest,
+    risk_job,
+    scan,
+)
 from backend.config import REPO_ROOT, settings
 from backend.db import get_db
 from backend.models import Farmer, LeafImage, SensorNode, SensorReading, SymptomReport
@@ -43,6 +54,7 @@ from backend.schemas import (
     PredictionOut,
     ReadingBatch,
     ReadingOut,
+    ScanPhotoOut,
     SensorNodeOut,
     SymptomReportIn,
     SymptomReportOut,
@@ -306,15 +318,15 @@ def _stored_path(path) -> str:
         return path.resolve().as_posix()
 
 
+CAPTURE_DATE_FORM = Form(None, description="When the photo was taken, with timezone; default: now")
+NODE_ID_FORM = Form(None, description="The sensor node at this plot; default: the farmer's only node")
+
+
 @app.post("/images", response_model=ImageUploadOut, status_code=status.HTTP_201_CREATED)
 def upload_image(
     file: UploadFile = File(..., description="The leaf photo (JPEG or PNG)"),
-    capture_date: datetime | None = Form(
-        None, description="When the photo was taken, with timezone; default: now"
-    ),
-    node_id: str | None = Form(
-        None, description="The sensor node at this plot; default: the farmer's only node"
-    ),
+    capture_date: datetime | None = CAPTURE_DATE_FORM,
+    node_id: str | None = NODE_ID_FORM,
     farmer: Farmer = Depends(auth.get_current_farmer),
     db: Session = Depends(get_db),
     classifier: cnn_service.CNNClassifier = Depends(cnn_service.get_classifier),
@@ -323,8 +335,42 @@ def upload_image(
 
     A photo the model cannot judge fairly (unreadable, too small, too dark,
     too blurry) gets 422 with a reason code and a message the app can show,
-    and nothing is stored, so the farmer simply retakes it.
+    and nothing is stored, so the farmer simply retakes it. The same as a
+    scan of one photo (POST /scans).
     """
+    return _diagnose_scan(db, farmer, classifier, [file], capture_date, node_id)
+
+
+@app.post("/scans", response_model=ImageUploadOut, status_code=status.HTTP_201_CREATED)
+def upload_scan(
+    files: list[UploadFile] = File(..., description=(
+        f"1 to {scan.MAX_PHOTOS} photos of the SAME leaf (JPEG or PNG): the whole leaf, a close-up "
+        "of the worst spot, the leaf from another angle")),
+    capture_date: datetime | None = CAPTURE_DATE_FORM,
+    node_id: str | None = NODE_ID_FORM,
+    farmer: Farmer = Depends(auth.get_current_farmer),
+    db: Session = Depends(get_db),
+    classifier: cnn_service.CNNClassifier = Depends(cnn_service.get_classifier),
+):
+    """Check one leaf from several photos, as one result (backend/scan.py).
+
+    Every photo must pass the quality check; if any fails, nothing is stored
+    and the 422 lists which photos to retake (`detail.photos`: index, reason,
+    message). The photos' CNN probabilities are averaged and fused with the
+    weather risk once: one diagnosis, one history entry, at most one SMS.
+    """
+    if not 1 <= len(files) <= scan.MAX_PHOTOS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Send 1 to {scan.MAX_PHOTOS} photos of the same leaf (got {len(files)}).",
+        )
+    return _diagnose_scan(db, farmer, classifier, files, capture_date, node_id)
+
+
+def _diagnose_scan(db: Session, farmer: Farmer, classifier: cnn_service.CNNClassifier,
+                   files: list[UploadFile], capture_date: datetime | None,
+                   node_id: str | None) -> ImageUploadOut:
+    """Check, classify, store and diagnose 1-3 photos of one leaf. Shared by /images and /scans."""
     if capture_date is not None and capture_date.tzinfo is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -332,55 +378,77 @@ def upload_image(
         )
 
     node = _node_for_photo(db, farmer, node_id)
+    several = len(files) > 1
 
-    data = file.file.read(MAX_UPLOAD_BYTES + 1)
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"The photo is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
-        )
+    uploads = []
+    for index, file in enumerate(files):
+        data = file.file.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
+            which = f"Photo {index + 1}" if several else "The photo"
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"{which} is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+            )
+        uploads.append(data)
 
-    try:
-        image = cnn_service.load_image(data)
-        cnn_service.check_quality(image)
-    except cnn_service.ImageRejected as rejected:
+    # Check every photo before judging any, so the farmer hears about all the
+    # photos to retake at once, and the model never sees a scan with a bad photo.
+    images, rejected = [], []
+    for index, data in enumerate(uploads):
+        try:
+            image = cnn_service.load_image(data)
+            cnn_service.check_quality(image)
+            images.append(image)
+        except cnn_service.ImageRejected as problem:
+            rejected.append({"index": index, "reason": problem.reason, "message": problem.message})
+    if rejected:
+        message = (" ".join(f"Photo {r['index'] + 1}: {r['message']}" for r in rejected) if several
+                   else rejected[0]["message"])
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"reason": rejected.reason, "message": rejected.message},
-        ) from None
+            detail={"reason": rejected[0]["reason"], "message": message, "photos": rejected},
+        )
 
-    prediction = classifier.predict(cnn_service.to_model_input(image))
+    predictions = [classifier.predict(cnn_service.to_model_input(image)) for image in images]
+    combined = scan.combine(predictions)
+    taken = capture_date or datetime.now(UTC)
 
-    # Keep the file exactly as uploaded; the model saw a resized copy.
-    image_id = ids.new_id(ids.LEAF_IMAGE)
-    extension = SAVED_EXTENSIONS.get(cnn_service.image_format(data), ".img")
+    # Keep each file exactly as uploaded; the model saw a resized copy.
     farmer_dir = UPLOAD_DIR / farmer.farmer_id
     farmer_dir.mkdir(parents=True, exist_ok=True)
-    path = farmer_dir / f"{image_id}{extension}"
-    path.write_bytes(data)
-
-    leaf_image = LeafImage(
-        image_id=image_id,
-        farmer_id=farmer.farmer_id,
-        file_path=_stored_path(path),
-        capture_date=capture_date or datetime.now(UTC),
-    )
+    rows: list[LeafImage] = []
+    paths = []
     try:
-        db.add(leaf_image)
-        db.flush()
+        for data, prediction in zip(uploads, predictions, strict=True):
+            image_id = ids.new_id(ids.LEAF_IMAGE)
+            path = farmer_dir / f"{image_id}{SAVED_EXTENSIONS.get(cnn_service.image_format(data), '.img')}"
+            path.write_bytes(data)
+            paths.append(path)
+            row = LeafImage(
+                image_id=image_id,
+                farmer_id=farmer.farmer_id,
+                file_path=_stored_path(path),
+                capture_date=taken,
+                first_image_id=rows[0].image_id if rows else None,
+                probabilities=prediction.probabilities,
+            )
+            db.add(row)
+            db.flush()  # the first photo exists before the others point to it
+            rows.append(row)
         # Fusion (backend/fusion.py): the weather risk r for the photo's own
         # day moves the late-blight threshold tau(r); the diagnosis row and
-        # its 48 h of contributing sensor readings are written with the image.
+        # its 48 h of contributing sensor readings are written with the photos.
         diagnosis, fused, contributions = fusion.diagnose(
-            db, image_id, node.node_id if node else None, leaf_image.capture_date,
-            prediction.probabilities,
+            db, rows[0].image_id, node.node_id if node else None, taken, combined.probabilities,
         )
         db.commit()
     except SQLAlchemyError:
         db.rollback()
-        path.unlink(missing_ok=True)  # no rows, so no orphan file either
+        for path in paths:
+            path.unlink(missing_ok=True)  # no rows, so no orphan files either
         raise
-    db.refresh(leaf_image)
+    for row in rows:
+        db.refresh(row)
 
     # SMS after the diagnosis is safely stored: a failed send can never lose it.
     sms_alert = None
@@ -389,12 +457,13 @@ def upload_image(
         db.commit()
         sms_alert = None if alert is None else alert.delivery_status
 
+    note = scan.disagreement_note(combined)
     return ImageUploadOut(
-        image=LeafImageOut.model_validate(leaf_image),
+        image=LeafImageOut.model_validate(rows[0]),
         prediction=PredictionOut(
-            label=prediction.label,
-            confidence=prediction.confidence,
-            probabilities=prediction.probabilities,
+            label=combined.label,
+            confidence=combined.confidence,
+            probabilities=combined.probabilities,
         ),
         diagnosis=DiagnosisOut(
             result_id=diagnosis.result_id,
@@ -407,10 +476,16 @@ def upload_image(
             threshold_used=fused.threshold_used,
             late_blight_flagged=fused.late_blight_flagged,
             risk_level=fused.risk_level,
-            summary=fused.summary,
+            summary=f"{fused.summary} {note}" if note else fused.summary,
             contributing_readings=contributions,
             sms_alert=sms_alert,
         ),
+        photos=[
+            ScanPhotoOut(image_id=row.image_id, label=prediction.label, confidence=prediction.confidence,
+                         probabilities=prediction.probabilities)
+            for row, prediction in zip(rows, predictions, strict=True)
+        ],
+        photos_agree=combined.photos_agree,
     )
 
 

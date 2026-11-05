@@ -187,6 +187,13 @@ class LeafImage(Base):
     farmer_id: Mapped[str] = mapped_column(ID, ForeignKey("farmers.farmer_id"))
     file_path: Mapped[str] = mapped_column(String(500))
     capture_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # A scan is 1-3 photos of one leaf, diagnosed together (backend/scan.py). The first photo
+    # carries the diagnosis; the others point to it here. NULL for the first or only photo.
+    first_image_id: Mapped[str | None] = mapped_column(
+        ID, ForeignKey("leaf_images.image_id"), nullable=True, index=True)
+    # This photo's own CNN output (the diagnosis holds the scan's combined one).
+    # NULL for photos stored before scans existed.
+    probabilities: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class DiagnosisResult(Base):
