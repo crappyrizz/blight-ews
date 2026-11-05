@@ -8,6 +8,8 @@ import 'dart:io';
 import 'package:blight_ews/api.dart';
 import 'package:blight_ews/models.dart';
 import 'package:blight_ews/report_screen.dart';
+import 'package:blight_ews/trend_chart.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -104,6 +106,72 @@ void main() {
       expect(history.items[2].detail, 'Late blight flagged');
       expect(history.items[3].title, 'SMS: high risk warning');
       expect(dayHeading(DateTime(2026, 10, 18)), 'Sun 18 Oct');
+    });
+  });
+
+  group('Trend', () {
+    // 14 days, 1 to 14 Oct, newest first as the backend sends them. Hutton
+    // scores: a dry first week, then blight weather; the forecast stored under
+    // a day (made from its readings) is about the next day.
+    Map<String, dynamic> day(int d, double? measured, double? p24) => {
+          'for_date': '2026-10-${d.toString().padLeft(2, '0')}',
+          'hutton': {'sensor': measured == null ? null : {'score': measured, 'label': 'x'}},
+          'learned': {'p24': {'sensor': p24, 'api': null}, 'p48': {'sensor': null, 'api': null}},
+          'risk_level': null,
+        };
+    final measured = <double?>[0, 0, 0, 0, 0, 0, 0, 0.5, 0.5, 1, 1, 0, 0.5, 1];
+    final forecasts = <double?>[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.4, 0.5, 0.8, 0.9, 0.2, 0.3, 0.7, 0.42];
+    Trend trendOf(List<double?> m, List<double?> f, {Map<String, dynamic>? bands}) => History.fromJson({
+          'bands': bands ?? {'medium_from': 0.33, 'high_from': 0.66},
+          'risk': [for (var d = m.length; d >= 1; d--) day(d, m[d - 1], f[d - 1])],
+        }).trend!;
+
+    test('each forecast sits on the day it was about, and tomorrow ends the chart', () {
+      final t = trendOf(measured, forecasts);
+      expect(t.points.length, 15);
+      expect(t.points.first.day, DateTime(2026, 10, 1));
+      expect(t.points.first.forecast, isNull); // made on 30 Sep: outside the window
+      expect(t.points[1].forecast, 0.1); // made on 1 Oct, about 2 Oct
+      expect(t.points[13].measured, 1.0);
+      expect(t.points[13].forecast, 0.7);
+      expect(t.tomorrow.day, DateTime(2026, 10, 15));
+      expect(t.tomorrow.measured, isNull);
+      expect(t.tomorrow.forecast, 0.42);
+    });
+
+    test('bands come from the server', () {
+      final t = trendOf(measured, forecasts, bands: {'medium_from': 0.4, 'high_from': 0.8});
+      expect(t.band(0.39), RiskLevel.low);
+      expect(t.band(0.4), RiskLevel.medium);
+      expect(t.band(0.8), RiskLevel.high);
+    });
+
+    test('summary: direction, blight days, tomorrow, and how the forecasts did', () {
+      final s = trendOf(measured, forecasts).summary;
+      expect(s, contains('Blight weather has become more frequent over the last week.'));
+      expect(s, contains('Blight weather on 6 of the 14 days with full readings, most recently on 14 Oct.'));
+      expect(s, contains("The model's forecast for tomorrow: 42% (moderate)."));
+      // Forecast vs measured band on 2-14 Oct: the same every day except 13 Oct (low forecast, moderate measured).
+      expect(s, contains('On 12 of 13 days, the forecast was in the same band as the weather that followed.'));
+    });
+
+    test('gaps stay gaps, and too little data says so instead of guessing', () {
+      final t = trendOf([null, null, 0.5, null], [null, 0.6, null, null]);
+      expect(t.points[0].measured, isNull);
+      expect(t.points[2].forecast, 0.6);
+      expect(t.tomorrow.forecast, isNull);
+      expect(t.summary, contains('Too few days with full sensor readings yet'));
+      expect(t.summary, contains('No forecast for tomorrow yet.'));
+      expect(t.summary, contains('Blight weather on 1 of the 1 days'));
+    });
+
+    testWidgets('the card draws the chart, the key and the sentences', (tester) async {
+      await tester.pumpWidget(MaterialApp(home: Scaffold(body: SingleChildScrollView(
+          child: TrendCard(trend: trendOf(measured, forecasts))))));
+      expect(find.text('Trend'), findsOneWidget);
+      expect(find.text("Model's forecast for that day, made the day before"), findsOneWidget);
+      expect(find.textContaining('more frequent over the last week'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 

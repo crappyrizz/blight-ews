@@ -216,6 +216,8 @@ def build_history(session: Session, node: SensorNode, days: int, now: datetime |
         "node_id": node.node_id,
         "from_date": first,
         "to_date": today,
+        # The low / medium / high cut-offs, so the app's trend chart bands scores as the server does.
+        "bands": {"medium_from": fusion.MEDIUM_RISK_FROM, "high_from": fusion.HIGH_RISK_FROM},
         "risk": risk_days,
         "diagnoses": [{
             "result_id": d.result_id, "image_id": d.image_id, "timestamp": d.timestamp,

@@ -407,11 +407,13 @@ Notes on the image export:
 
 ## Mobile app (app/, Flutter, Android)
 
-Flat layout: `lib/main.dart` (theme, start screen), `lib/api.dart` (every backend call, the login token in `flutter_secure_storage`, errors turned into plain sentences, and no exception other than `ApiException` ever escaping), `lib/models.dart`, `lib/widgets.dart`, and one file per screen: `login_screen.dart`, `register_screen.dart`, `home_screen.dart` (bottom navigation: Home, Scan, History, Report), `dashboard_screen.dart` (with "Send me a status SMS"), `scan_screen.dart` (camera or gallery, upload progress, Retake on a quality-check rejection), `diagnosis_screen.dart` (the CNN result, flag, risk, and the r/tau reasoning on tap), `history_screen.dart` and `report_screen.dart` (symptom onset date, no future days).
+Flat layout: `lib/main.dart` (theme, start screen), `lib/api.dart` (every backend call, the login token in `flutter_secure_storage`, errors turned into plain sentences, and no exception other than `ApiException` ever escaping), `lib/models.dart`, `lib/widgets.dart`, and one file per screen: `login_screen.dart`, `register_screen.dart`, `home_screen.dart` (bottom navigation: Home, Scan, History, Report), `dashboard_screen.dart` (with "Send me a status SMS"), `scan_screen.dart` (camera or gallery, upload progress, Retake on a quality-check rejection), `diagnosis_screen.dart` (the CNN result, flag, risk, and the r/tau reasoning on tap), `history_screen.dart` (the last 30 days, with the trend card from `trend_chart.dart` on top) and `report_screen.dart` (symptom onset date, no future days).
+
+- **Trend (History screen):** a bar per day for the blight weather the sensor measured (Hutton score; nothing on a day without full readings), the learned model's 24 h forecast for each day as a dashed line (placed on the day it was about, so the two can be compared), tomorrow's forecast as the last point, over the server's low / moderate / high bands. Under it, the same in sentences: which way the last week went, how many blight-weather days, tomorrow's forecast, and on how many days the forecast landed in the same band as the weather that followed. Drawn with a `CustomPainter`, no chart package.
 
 - **Server address:** the single constant `apiBaseUrl` in `lib/api.dart`. By default it is the hosted server, `https://blight-ews-api.onrender.com` (see Deployment), so a plain `flutter build apk` works from any network. Requests wait up to 75 s, because the free Render server takes about a minute to wake after 15 quiet minutes. For a backend on the PC, override it without editing: `flutter run --dart-define=API_BASE_URL=http://<PC-IP>:8000`. From the Android emulator, the PC is `http://10.0.2.2:8000`.
 - **Plain HTTP is allowed for development only** (`android/app/src/main/res/xml/network_security_config.xml`). Remove it for production and serve the API over HTTPS.
-- Flutter SDK at `C:\srclutter` (on the user PATH); Android Studio's JDK (`flutter config --jdk-dir`).
+- Flutter SDK at `C:\src\flutter` (on the user PATH); Android Studio's JDK (`flutter config --jdk-dir`).
 
 ```powershell
 # 1. Backend reachable from the phone (same Wi-Fi as the PC):
