@@ -37,7 +37,7 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend import fusion, sms
+from backend import events, fusion, sms
 from backend.models import Alert, DiagnosisResult, Farmer, SensorNode
 
 ALERT_HIGH_RISK = "high_risk"
@@ -48,6 +48,8 @@ HIGH_RISK_COOLDOWN = timedelta(hours=24)
 STATUS_COOLDOWN = timedelta(hours=1)
 
 SMS_MAX_CHARS = 160
+# delivery_status values that mean the SMS is on its way or arrived (lower case; see sms_failed).
+SMS_FINE_STATUSES = {sms.STATUS_DRY_RUN, sms.STATUS_SUBMITTED, "success", "sent", "buffered", "submitted", "queued"}
 PLOT_MAX_CHARS = 36  # keeps every template inside 160 characters (tested)
 SIGNATURE = " -Blight EWS"
 
@@ -129,7 +131,26 @@ def send_and_record(session: Session, node: SensorNode, alert_type: str, message
     )
     session.add(alert)
     session.flush()
+    if sms_failed(outcome.status):
+        farmer = _farmer(session, node)
+        events.record("sms", "sms_not_sent",
+                      f"The {alert_type.replace('_', ' ')} SMS for {node.node_id} was not sent to {farmer.name} "
+                      f"({outcome.status}: {outcome.detail}).",
+                      events.WARNING, node_id=node.node_id, farmer_id=farmer.farmer_id)
     return alert
+
+
+def sms_failed(delivery_status: str | None) -> bool:
+    """Whether an alert's delivery_status means the farmer did not get the SMS.
+
+    Fine: our own dry_run / submitted, and Africa's Talking's delivery reports
+    Success, Sent, Buffered, Submitted, Queued. Anything else (error, Failed:
+    reason, Rejected: reason, InvalidPhoneNumber, ...) is a failure.
+    """
+    if not delivery_status:
+        return False
+    head = delivery_status.split(":", 1)[0].strip().lower()
+    return head not in SMS_FINE_STATUSES
 
 
 def _last_alert_at(session: Session, node_id: str, alert_type: str) -> datetime | None:
@@ -216,4 +237,10 @@ def apply_delivery_report(session: Session, message_id: str, status: str,
         return None
     alert.delivery_status = (f"{status}: {failure_reason}" if failure_reason else status)[:30]
     session.flush()
+    if sms_failed(alert.delivery_status):
+        node = session.get(SensorNode, alert.node_id)
+        events.record("sms", "sms_not_delivered",
+                      f"An SMS for {alert.node_id} was not delivered "
+                      f"({status}{': ' + failure_reason if failure_reason else ''}).",
+                      events.WARNING, node_id=alert.node_id, farmer_id=node.farmer_id if node else None)
     return alert

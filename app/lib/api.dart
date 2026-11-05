@@ -96,6 +96,10 @@ class Api {
   Future<Dashboard> dashboard(String nodeId) async =>
       Dashboard.fromJson(await _send('GET', '/nodes/$nodeId/dashboard'));
 
+  /// Admins only: how each part of the system is doing (GET /admin/status).
+  Future<SystemStatus> systemStatus() async =>
+      SystemStatus.fromJson(await _send('GET', '/admin/status') as Map<String, dynamic>);
+
   Future<History> history(String nodeId, {int days = 30}) async =>
       History.fromJson(await _send('GET', '/nodes/$nodeId/history?days=$days'));
 
@@ -246,6 +250,11 @@ class Api {
       return ApiException('The server had a problem. Please try again in a few minutes.');
     }
     if (detail is String) return ApiException(detail);
+    // Every API error also carries {"error": {"code", "message"}}: a plain sentence for the rest.
+    final error = body is Map ? body['error'] : null;
+    if (error is Map && error['message'] is String) {
+      return ApiException(error['message'] as String, reason: error['code']?.toString());
+    }
     return ApiException('Something went wrong (code $status). Please try again.');
   }
 

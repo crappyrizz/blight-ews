@@ -35,7 +35,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from backend import alerts, hutton, risk_model
+from backend import alerts, events, hutton, risk_model
 from backend.config import settings
 from backend.models import RiskScore, SensorNode
 
@@ -95,7 +95,9 @@ def learned_model_available() -> bool:
         risk_model.load_models()
         return True
     except FileNotFoundError as error:
-        log.warning("Learned model skipped: %s", error)
+        events.record("risk_job", "learned_model_missing",
+                      f"The learned 24/48 h model is missing, so only the Hutton rule is scoring ({error}).",
+                      events.WARNING, quiet_hours=24)
         return False
 
 
@@ -134,12 +136,26 @@ def score_node(session: Session, node: SensorNode, today: date, learned_availabl
 
 
 def run_once(session: Session, today: date | None = None) -> list[dict]:
-    """One pass over every node. Returns a short summary per node and source."""
+    """One pass over every node. Returns a short summary per node and source.
+
+    A node whose scoring fails is recorded (backend/events.py) and skipped, so
+    one bad node never stops the others; its summary entry carries the error.
+    """
     today = today or local_today()
     learned_available = learned_model_available()
     summary = []
-    for node in session.scalars(select(SensorNode).order_by(SensorNode.node_id)).all():
-        summary += score_node(session, node, today, learned_available)
+    node_ids = session.scalars(select(SensorNode.node_id).order_by(SensorNode.node_id)).all()
+    for node_id in node_ids:
+        try:
+            summary += score_node(session, session.get(SensorNode, node_id), today, learned_available)
+        except Exception as error:  # this node only: the others still get scored
+            session.rollback()
+            problem = f"{type(error).__name__}: {error}"
+            events.record("risk_job", "node_scoring_failed",
+                          f"The risk for {node_id} could not be worked out ({problem}). The other sensors "
+                          "were scored; this one is tried again at the next run.",
+                          node_id=node_id, quiet_hours=6)
+            summary.append({"node_id": node_id, "error": problem})
     return summary
 
 
@@ -150,9 +166,18 @@ def run_job() -> None:
     try:
         with SessionLocal() as session:
             summary = run_once(session)
-        log.info("Risk job done for %d node/source pairs", len(summary))
-    except Exception:  # one bad run must not stop the schedule
-        log.exception("Risk job failed; it will run again at the next interval")
+    except Exception as error:  # one bad run must not stop the schedule
+        log.exception("Risk job failed")
+        events.record("risk_job", "risk_job_failed",
+                      f"The hourly risk job failed ({type(error).__name__}: {error}). It runs again at the "
+                      "next interval.")
+        return
+    failed = sorted({entry["node_id"] for entry in summary if "error" in entry})
+    nodes = len({entry["node_id"] for entry in summary})
+    events.record("risk_job", "risk_job_ran",
+                  f"Scored {nodes - len(failed)} of {nodes} sensors"
+                  + (f"; failed: {', '.join(failed)}." if failed else "."), events.INFO)
+    events.prune_info()
 
 
 def start_scheduler():

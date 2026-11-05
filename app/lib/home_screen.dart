@@ -3,6 +3,7 @@
 // the plot node plus a simulated or demo node) gets a picker above the tabs;
 // every tab then shows, and sends photos and reports for, the chosen sensor.
 // When a newer build of the app has been published, a strip above the tabs offers it.
+// Admins get a fifth tab, Status: how each part of the system is doing.
 
 import 'package:flutter/material.dart';
 
@@ -13,6 +14,7 @@ import 'main.dart';
 import 'models.dart';
 import 'report_screen.dart';
 import 'scan_screen.dart';
+import 'status_screen.dart';
 import 'update.dart';
 import 'widgets.dart';
 
@@ -30,6 +32,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<SensorNode> _nodes = const [];
   SensorNode? _node;
   String? _farmId;
+  bool _isAdmin = false;
   String? _error;
   int _historyVersion = 0; // bumped after a new diagnosis or report, to refresh History
   AppUpdate? _update; // a newer build of the app, until the farmer closes the strip
@@ -60,6 +63,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       setState(() {
         _farmId = me.farmId;
+        _isAdmin = me.isAdmin;
         _nodes = nodes;
         _node = pickNode(nodes, remembered);
       });
@@ -160,6 +164,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ScanScreen(key: ValueKey('scan-$id'), node: node, onDiagnosed: _somethingNew),
           HistoryScreen(key: ValueKey('history-$id-$_historyVersion'), node: node),
           ReportScreen(key: ValueKey('report-$id'), node: node, onReported: _somethingNew),
+          if (_isAdmin) const StatusScreen(),
         ],
       ),
       bottomNavigationBar: Column(
@@ -170,15 +175,23 @@ class _HomeScreenState extends State<HomeScreen> {
           NavigationBar(
             selectedIndex: _tab,
             onDestinationSelected: _go,
-            destinations: const [
-              NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
-              NavigationDestination(
+            destinations: [
+              const NavigationDestination(
+                  icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
+              const NavigationDestination(
                 icon: Icon(Icons.camera_alt_outlined),
                 selectedIcon: Icon(Icons.camera_alt),
                 label: 'Scan',
               ),
-              NavigationDestination(icon: Icon(Icons.history), label: 'History'),
-              NavigationDestination(icon: Icon(Icons.flag_outlined), selectedIcon: Icon(Icons.flag), label: 'Report'),
+              const NavigationDestination(icon: Icon(Icons.history), label: 'History'),
+              const NavigationDestination(
+                  icon: Icon(Icons.flag_outlined), selectedIcon: Icon(Icons.flag), label: 'Report'),
+              if (_isAdmin)
+                const NavigationDestination(
+                  icon: Icon(Icons.monitor_heart_outlined),
+                  selectedIcon: Icon(Icons.monitor_heart),
+                  label: 'Status',
+                ),
             ],
           ),
         ],

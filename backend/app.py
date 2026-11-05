@@ -21,15 +21,21 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend import (
     alerts,
     auth,
     cnn_service,
     dashboard,
+    events,
     fusion,
     hutton,
     ids,
@@ -37,6 +43,7 @@ from backend import (
     risk_job,
     scan,
 )
+from backend import status as system_status
 from backend.config import REPO_ROOT, settings
 from backend.db import get_db
 from backend.models import Farmer, LeafImage, SensorNode, SensorReading, SymptomReport
@@ -75,7 +82,11 @@ SAVED_EXTENSIONS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
 async def lifespan(app: FastAPI):
     # Load the CNN once, not per request. If the model files are missing the
     # API still starts; only image upload answers 503.
-    cnn_service.load_classifier()
+    if not cnn_service.load_classifier():
+        await run_in_threadpool(
+            events.record, "cnn", "cnn_not_loaded",
+            "The leaf checker (CNN) did not load: models/cnn.tflite or models/labels.txt is missing on the "
+            "server, so leaf photos are refused. Run tools/fetch_models.py.", quiet_hours=6)
     # The hourly risk job runs in a background thread for as long as the API
     # does (one API process only; scores are upserts, so a rerun is harmless).
     scheduler = risk_job.start_scheduler()
@@ -85,6 +96,54 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Blight Early-Warning System", lifespan=lifespan)
+
+
+# --- one shape for every error ------------------------------------------------------------
+
+ERROR_CODES = {400: "bad_request", 401: "not_logged_in", 403: "not_allowed", 404: "not_found",
+               405: "method_not_allowed", 409: "conflict", 413: "too_large", 422: "invalid_input",
+               500: "server_error", 503: "unavailable"}
+
+
+def error_body(status_code: int, detail) -> dict:
+    """Every error the API answers: FastAPI's usual `detail` (unchanged, so existing callers keep
+    working) plus `error`: a stable `code` and one plain `message` a person can read.
+
+    The code is the endpoint's own reason where it gives one (too_blurry, risk_high, ...),
+    else one per HTTP status.
+    """
+    code, message = ERROR_CODES.get(status_code, f"http_{status_code}"), None
+    if isinstance(detail, dict):
+        code = detail.get("reason") or code
+        message = detail.get("message")
+    elif isinstance(detail, str):
+        message = detail
+    elif isinstance(detail, list) and detail and isinstance(detail[0], dict):  # validation errors
+        first = detail[0]
+        field = ".".join(str(part) for part in first.get("loc", [])[1:])
+        message = f"{field}: {first.get('msg')}" if field else first.get("msg")
+    return {"detail": detail, "error": {"code": code, "message": message or "Something went wrong."}}
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request, exc: StarletteHTTPException):
+    return JSONResponse(error_body(exc.status_code, exc.detail), status_code=exc.status_code,
+                        headers=getattr(exc, "headers", None))
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc: RequestValidationError):
+    return JSONResponse(error_body(422, jsonable_encoder(exc.errors())), status_code=422)
+
+
+@app.exception_handler(Exception)
+async def server_error(request, exc: Exception):
+    """Anything unexpected: recorded for the admin (GET /admin/status), and a plain 500."""
+    await run_in_threadpool(events.record, "api", "server_error",
+                            f"{request.method} {request.url.path} failed: {type(exc).__name__}: {exc}",
+                            quiet_hours=1)
+    return JSONResponse(error_body(500, "The server had a problem. It has been recorded for the admin."),
+                        status_code=500)
 
 
 @app.get("/health")
@@ -296,6 +355,17 @@ def get_readings(
 
 
 # --- admin -------------------------------------------------------------
+
+
+@app.get("/admin/status")
+def admin_status(
+    admin: Farmer = Depends(auth.require_admin),
+    db: Session = Depends(get_db),
+):
+    """Admin only: is everything working? Each part (database, leaf checker, risk job, learned
+    model, SMS, sensors, weather data) as ok / warning / error with a sentence, every sensor's
+    last contact, and the problems recorded in the last 7 days (backend/status.py)."""
+    return system_status.admin_status(db)
 
 
 @app.get("/admin/farmers", response_model=list[FarmerOut])
@@ -529,7 +599,9 @@ def node_dashboard(
     """Latest reading, last 24 h, today's Hutton status, the 24 h / 48 h forecast,
     the current risk level and a one-sentence, decision-support summary."""
     node = auth.get_owned_or_404(db, SensorNode, node_id, farmer)
-    return dashboard.build_dashboard(db, node)
+    body = dashboard.build_dashboard(db, node)
+    body["warnings"] = system_status.farmer_warnings(db, node)  # only what affects this farmer
+    return body
 
 
 MAX_HISTORY_DAYS = 365
