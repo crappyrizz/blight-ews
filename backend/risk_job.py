@@ -146,8 +146,11 @@ def run_once(session: Session, today: date | None = None) -> list[dict]:
     summary = []
     node_ids = session.scalars(select(SensorNode.node_id).order_by(SensorNode.node_id)).all()
     for node_id in node_ids:
+        node = session.get(SensorNode, node_id)
+        if node is None:  # deleted since the list was read
+            continue
         try:
-            summary += score_node(session, session.get(SensorNode, node_id), today, learned_available)
+            summary += score_node(session, node, today, learned_available)
         except Exception as error:  # this node only: the others still get scored
             session.rollback()
             problem = f"{type(error).__name__}: {error}"

@@ -76,7 +76,10 @@ def test_old_routine_rows_are_pruned_but_problems_kept(db_session):
 
 
 def test_one_failing_sensor_does_not_stop_the_others(db_session, monkeypatch):
-    bad, good = make_node(db_session, phone="+254722000201"), make_node(db_session, phone="+254722000202")
+    first, second = sorted([make_node(db_session, phone="+254722000201"),
+                            make_node(db_session, phone="+254722000202")], key=lambda n: n.node_id)
+    db_session.commit()  # stored, as real sensors are: the failure's rollback must not erase them
+    bad, good = first, second  # the job scores in node_id order: the failure comes first, the hard case
     real = risk_job.score_node
 
     def score(session, node, today, learned):
