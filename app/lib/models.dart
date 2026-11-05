@@ -205,6 +205,8 @@ class Diagnosis {
     required this.flagged,
     required this.summary,
     this.smsAlert,
+    this.photos = const [],
+    this.photosAgree = true,
   });
 
   final String label; // the CNN's most likely class
@@ -218,6 +220,8 @@ class Diagnosis {
   final bool flagged; // pLate >= tau(r)
   final String summary;
   final String? smsAlert; // delivery status if an SMS went out
+  final List<PhotoResult> photos; // a scan: what the CNN saw in each photo, in order
+  final bool photosAgree; // every photo showed the same thing
 
   /// Where the weather risk came from, in words.
   String get riskSource => switch (riskBasis) {
@@ -247,7 +251,8 @@ class Diagnosis {
         'To flag late blight the app $direction. $verdict';
   }
 
-  factory Diagnosis.fromJson(Map<String, dynamic> d, Map<String, dynamic> prediction) {
+  factory Diagnosis.fromJson(Map<String, dynamic> d, Map<String, dynamic> prediction,
+      {List<PhotoResult> photos = const [], bool photosAgree = true}) {
     final probabilities = (prediction['probabilities'] as Map?) ?? const {};
     return Diagnosis(
       label: d['label'] as String,
@@ -263,8 +268,21 @@ class Diagnosis {
       flagged: d['late_blight_flagged'] as bool,
       summary: (d['summary'] as String?) ?? '',
       smsAlert: d['sms_alert'] as String?,
+      photos: photos,
+      photosAgree: photosAgree,
     );
   }
+}
+
+/// One photo of a scan: the CNN's answer for that photo alone.
+class PhotoResult {
+  PhotoResult({required this.label, required this.confidence});
+
+  final String label;
+  final double confidence;
+
+  static PhotoResult fromJson(Map<String, dynamic> j) =>
+      PhotoResult(label: j['label'] as String, confidence: (j['confidence'] as num).toDouble());
 }
 
 class UploadResult {
@@ -278,6 +296,8 @@ class UploadResult {
         diagnosis: Diagnosis.fromJson(
           j['diagnosis'] as Map<String, dynamic>,
           j['prediction'] as Map<String, dynamic>,
+          photos: [for (final p in (j['photos'] as List?) ?? const []) PhotoResult.fromJson(p as Map<String, dynamic>)],
+          photosAgree: (j['photos_agree'] as bool?) ?? true,
         ),
       );
 }
@@ -312,10 +332,11 @@ class History {
     for (final d in (j['diagnoses'] as List?) ?? const []) {
       final m = d as Map<String, dynamic>;
       final flagged = m['late_blight_flagged'] == true;
+      final photos = (m['photo_count'] as num?)?.toInt() ?? 1;
       items.add(HistoryItem(
         kind: HistoryKind.diagnosis,
         when: DateTime.parse(m['timestamp'] as String).toLocal(),
-        title: 'Leaf photo: ${diseaseName(m['disease_label'] as String)} '
+        title: '${photos > 1 ? 'Leaf check ($photos photos)' : 'Leaf photo'}: ${diseaseName(m['disease_label'] as String)} '
             '(${percent((m['confidence'] as num).toDouble())})',
         detail: flagged ? 'Late blight flagged' : 'Late blight not flagged',
         level: parseRiskLevel(m['risk_level'] as String?),

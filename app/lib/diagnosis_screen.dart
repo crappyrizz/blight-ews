@@ -33,11 +33,42 @@ class DiagnosisScreen extends StatelessWidget {
                   Text(diseaseName(d.label), style: text.headlineMedium),
                   const SizedBox(height: 4),
                   Text('${percent(d.confidence)} confidence', style: text.titleMedium),
+                  if (d.photos.length > 1) ...[
+                    const SizedBox(height: 4),
+                    Text('Combined from ${d.photos.length} photos', style: text.bodyMedium),
+                  ],
                 ],
               ),
             ),
           ),
           const SizedBox(height: 12),
+          // A scan: what each photo showed on its own, so a disagreement is visible.
+          if (d.photos.length > 1) ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Icon(d.photosAgree ? Icons.check_circle_outline : Icons.warning_amber_rounded,
+                          color: d.photosAgree ? null : riskColor(RiskLevel.medium)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(d.photosAgree ? 'All photos showed the same' : 'The photos did not agree',
+                            style: text.titleMedium),
+                      ),
+                    ]),
+                    const SizedBox(height: 8),
+                    for (var i = 0; i < d.photos.length; i++)
+                      Text('Photo ${i + 1}: ${diseaseName(d.photos[i].label)} (${percent(d.photos[i].confidence)})',
+                          style: text.bodyLarge),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           // The decision that matters: late blight flagged or not.
           Container(
             padding: const EdgeInsets.all(16),

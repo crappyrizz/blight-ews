@@ -236,6 +236,7 @@ class LeafImageOut(BaseModel):
     image_id: str
     farmer_id: str
     capture_date: datetime
+    first_image_id: str | None = None  # set on a scan's 2nd and 3rd photos: the photo with the diagnosis
 
     @field_validator("capture_date")
     @classmethod
@@ -262,10 +263,21 @@ class DiagnosisOut(BaseModel):
     sms_alert: str | None = None  # delivery_status of the diagnosis SMS, if one was sent
 
 
+class ScanPhotoOut(BaseModel):
+    """One photo of a scan, with the CNN's answer for that photo alone."""
+
+    image_id: str
+    label: str
+    confidence: float
+    probabilities: dict[str, float]
+
+
 class ImageUploadOut(BaseModel):
-    image: LeafImageOut
-    prediction: PredictionOut  # the raw CNN output
+    image: LeafImageOut  # the scan's first photo: the diagnosis is linked to it
+    prediction: PredictionOut  # the raw CNN output (a scan: averaged over its photos)
     diagnosis: DiagnosisOut  # after fusion with the weather risk
+    photos: list[ScanPhotoOut] = []  # every photo's own CNN output, in upload order
+    photos_agree: bool = True  # every photo's most probable class is the same
 
 
 # --- symptom reports (farmer-reported onset of visible disease) ----------

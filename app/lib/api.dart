@@ -36,11 +36,12 @@ const String _nodeKey = 'selected_node'; // the sensor the farmer last chose
 
 /// A problem the app should show to the user, already in plain words.
 class ApiException implements Exception {
-  ApiException(this.message, {this.sessionExpired = false, this.reason});
+  ApiException(this.message, {this.sessionExpired = false, this.reason, this.rejectedPhotos = const {}});
 
   final String message;
   final bool sessionExpired; // true: send the user back to the login screen
   final String? reason; // the backend's code, e.g. "too_blurry" or "risk_high"
+  final Map<int, String> rejectedPhotos; // a scan's photos to retake: index -> why
 
   @override
   String toString() => message;
@@ -100,26 +101,30 @@ class Api {
 
   // --- leaf photos ------------------------------------------------------------------
 
-  /// Upload a leaf photo; the server checks it, runs the CNN and fuses the risk.
-  /// [onProgress] gets 0.0-1.0 as the bytes leave the phone.
-  Future<UploadResult> uploadImage(File photo,
+  /// Upload 1-3 photos of one leaf as one scan; the server checks each, runs the
+  /// CNN on each, averages them and fuses the risk once.
+  /// [onProgress] gets 0.0-1.0 as the bytes leave the phone (all photos together).
+  Future<UploadResult> uploadScan(List<File> photos,
       {required String nodeId, void Function(double)? onProgress}) async {
     final t = await _tokenOrThrow();
-    final length = await photo.length();
+    final lengths = [for (final photo in photos) await photo.length()];
+    final total = lengths.fold<int>(0, (a, b) => a + b);
     var sent = 0;
-    final counted = photo.openRead().transform(
-      StreamTransformer<List<int>, List<int>>.fromHandlers(handleData: (chunk, sink) {
-        sent += chunk.length;
-        onProgress?.call(length == 0 ? 1 : sent / length);
-        sink.add(chunk);
-      }),
-    );
-    final request = http.MultipartRequest('POST', Uri.parse('$apiBaseUrl/images'))
+    final request = http.MultipartRequest('POST', Uri.parse('$apiBaseUrl/scans'))
       ..headers['Authorization'] = 'Bearer $t'
       ..headers['Accept'] = 'application/json'
-      ..fields['node_id'] = nodeId
-      ..files.add(http.MultipartFile('file', counted, length, filename: photo.uri.pathSegments.last));
-    final body = await _guard('/images', () async {
+      ..fields['node_id'] = nodeId;
+    for (var i = 0; i < photos.length; i++) {
+      final counted = photos[i].openRead().transform(
+        StreamTransformer<List<int>, List<int>>.fromHandlers(handleData: (chunk, sink) {
+          sent += chunk.length;
+          onProgress?.call(total == 0 ? 1 : sent / total);
+          sink.add(chunk);
+        }),
+      );
+      request.files.add(http.MultipartFile('files', counted, lengths[i], filename: photos[i].uri.pathSegments.last));
+    }
+    final body = await _guard('/scans', () async {
       final streamed = await _client.send(request).timeout(_uploadTimeout);
       return http.Response.fromStream(streamed);
     });
@@ -224,7 +229,7 @@ class Api {
       }
     }
     if (status == 422) {
-      return ApiException(validationMessage(detail), reason: reason);
+      return ApiException(validationMessage(detail), reason: reason, rejectedPhotos: rejectedPhotosOf(detail));
     }
     if (status == 413) {
       return ApiException('That photo file is too large. Please take a new photo with the camera.');
@@ -242,6 +247,16 @@ class Api {
     }
     if (detail is String) return ApiException(detail);
     return ApiException('Something went wrong (code $status). Please try again.');
+  }
+
+  /// A scan's 422: which photos failed the quality check, and why (index -> message).
+  static Map<int, String> rejectedPhotosOf(dynamic detail) {
+    final photos = detail is Map ? detail['photos'] : null;
+    if (photos is! List) return const {};
+    return {
+      for (final p in photos.whereType<Map>())
+        if (p['index'] is int) p['index'] as int: (p['message'] ?? '').toString(),
+    };
   }
 
   /// FastAPI's 422 detail -> one plain sentence.

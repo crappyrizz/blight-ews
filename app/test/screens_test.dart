@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:blight_ews/api.dart';
 import 'package:blight_ews/models.dart';
 import 'package:blight_ews/report_screen.dart';
+import 'package:blight_ews/scan_screen.dart';
 import 'package:blight_ews/trend_chart.dart';
 import 'package:blight_ews/update.dart';
 import 'package:flutter/material.dart';
@@ -173,6 +174,82 @@ void main() {
       expect(find.text("Model's forecast for that day, made the day before"), findsOneWidget);
       expect(find.textContaining('more frequent over the last week'), findsOneWidget);
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('Leaf check with several photos', () {
+    test('a scan reply carries each photo and whether they agreed', () {
+      final reply = uploadResponse()
+        ..['photos'] = [
+          {'image_id': 'IMG-1', 'label': 'late_blight', 'confidence': 0.8, 'probabilities': {}},
+          {'image_id': 'IMG-2', 'label': 'healthy', 'confidence': 0.7, 'probabilities': {}},
+        ]
+        ..['photos_agree'] = false;
+      final d = UploadResult.fromJson(reply).diagnosis;
+      expect(d.photos.map((p) => p.label), ['late_blight', 'healthy']);
+      expect(d.photos[1].confidence, 0.7);
+      expect(d.photosAgree, isFalse);
+    });
+
+    test('a reply without photos (one photo, older server) still reads', () {
+      final d = UploadResult.fromJson(uploadResponse()).diagnosis;
+      expect(d.photos, isEmpty);
+      expect(d.photosAgree, isTrue);
+    });
+
+    test('the photos to retake are known by position', () {
+      final e = Api.explain(422, {
+        'detail': {
+          'reason': 'too_dark',
+          'message': 'Photo 2: too dark. Photo 3: blurry.',
+          'photos': [
+            {'index': 1, 'reason': 'too_dark', 'message': 'The photo is too dark.'},
+            {'index': 2, 'reason': 'too_blurry', 'message': 'The photo is blurry.'},
+          ],
+        },
+      }, '/scans');
+      expect(e.rejectedPhotos, {1: 'The photo is too dark.', 2: 'The photo is blurry.'});
+      expect(e.reason, 'too_dark');
+      expect(Api.explain(422, {'detail': 'x'}, '/scans').rejectedPhotos, isEmpty);
+    });
+
+    testWidgets('the scan screen asks for three photos and waits for at least one', (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400); // a typical phone, 393 dp wide
+      tester.view.devicePixelRatio = 2.75;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MaterialApp(
+          home: ScanScreen(node: SensorNode(nodeId: 'NODE-1', location: 'Plot'), onDiagnosed: () {})));
+      expect(find.text('1. The whole leaf'), findsOneWidget);
+      // Further down: the list builds what scrolls into view, as on the phone.
+      await tester.scrollUntilVisible(find.text('2. Closer: the worst spot'), 200);
+      await tester.scrollUntilVisible(find.text('3. The same leaf, another way'), 200);
+      final button = find.widgetWithText(FilledButton, 'Take at least one photo');
+      await tester.scrollUntilVisible(button, 200);
+      final check = tester.widget<FilledButton>(button);
+      expect(check.onPressed, isNull); // nothing to send yet
+      expect(tester.takeException(), isNull); // no overflow
+    });
+
+    test('the photos go to /scans in one request, in order', () async {
+      final dir = Directory.systemTemp.createTempSync('scan_test');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final photos = [for (final n in ['a', 'b', 'c']) File('${dir.path}/$n.jpg')..writeAsBytesSync([1, 2, 3, 4])];
+      http.BaseRequest? sent;
+      final api = Api(
+        storage: _FakeStorage(),
+        client: MockClient.streaming((request, body) async {
+          sent = request;
+          await body.drain<void>();
+          return http.StreamedResponse(Stream.value(utf8.encode(jsonEncode(uploadResponse()))), 201);
+        }),
+      );
+      final progress = <double>[];
+      await api.uploadScan(photos, nodeId: 'NODE-1', onProgress: progress.add);
+      final request = sent! as http.MultipartRequest;
+      expect(request.url.path, '/scans');
+      expect(request.fields['node_id'], 'NODE-1');
+      expect(request.files.map((f) => (f.field, f.filename)), [('files', 'a.jpg'), ('files', 'b.jpg'), ('files', 'c.jpg')]);
+      expect(progress.last, 1.0);
     });
   });
 
