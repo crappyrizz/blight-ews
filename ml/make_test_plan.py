@@ -1,12 +1,14 @@
-"""docs/test_plan.md: the functional test table for FR i-viii, filled in from real runs.
+"""docs/test_plan.md: the test table for FR i-viii and the non-functional checks, from real runs.
 
 Two kinds of rows, one table format (ID | Module | Test case | Input | Expected
 | Actual | Pass/Fail):
 
-- T-xx, automated. Each row names the pytest tests that check it. This script
-  runs the WHOLE pytest suite once and fills Actual and Pass/Fail from that
-  run's results: a row passes only if every test it names passed, and a test
-  that no longer exists fails the row rather than being skipped quietly.
+- T-xx, automated. Each row names the tests that check it: backend tests
+  ("test_x.py::test_name", pytest) and app tests ("app:x_test.dart::<group>
+  <description>", flutter test). This script runs BOTH whole suites once and
+  fills Actual and Pass/Fail from those runs: a row passes only if every test
+  it names passed, and a test that no longer exists fails the row rather than
+  being skipped quietly.
 - M-xx, manual: the app checklist on the phone, kept in
   docs/manual_app_checklist.csv. Do each check, then fill in its Actual,
   Pass/Fail and Date columns there; this script copies them across. A check
@@ -16,12 +18,16 @@ The functional requirements are those in the proposal (Chapter 3):
 i registration and authentication, ii microclimate sensing and logging,
 iii blight risk computation, iv leaf image capture and submission,
 v CNN leaf classification, vi risk-weighted fusion, vii SMS alerting,
-viii diagnosis history.
+viii diagnosis history. NFR collects the non-functional checks: security,
+reliability, error reporting and maintainability (app updates, CI).
 
-    .\\.venv\\Scripts\\python.exe -m ml.make_test_plan
+    .\\.venv\\Scripts\\python.exe -m ml.make_test_plan            # both suites
+    .\\.venv\\Scripts\\python.exe -m ml.make_test_plan --no-app   # without Flutter: app rows fail as not run
 """
 import argparse
 import csv
+import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,6 +38,8 @@ from pathlib import Path
 from backend.config import REPO_ROOT
 
 REPORT = REPO_ROOT / "docs" / "test_plan.md"
+APP_DIR = REPO_ROOT / "app"
+APP_PREFIX = "app:"  # app tests are named "app:<file>::<full test name>"
 MANUAL_CHECKLIST = REPO_ROOT / "docs" / "manual_app_checklist.csv"
 MANUAL_COLUMNS = ["ID", "FR", "Module", "Test case", "Input", "Expected", "Actual", "Pass/Fail", "Date"]
 
@@ -44,6 +52,7 @@ FRS = {
     "vi": "Risk-weighted fusion",
     "vii": "SMS alerting",
     "viii": "Diagnosis history",
+    "NFR": "Non-functional: security, reliability, error reporting, maintainability",
 }
 
 
@@ -51,7 +60,7 @@ def case(fr, module, test_case, given, expected, tests):
     return {"fr": fr, "module": module, "case": test_case, "input": given, "expected": expected, "tests": tests}
 
 
-# Each test is "<file in backend/tests>::<test function>".
+# Each test is "<file in backend/tests>::<test function>", or "app:<file in app/test>::<group> <description>".
 AUTOMATED = [
     # --- FR i: registration and authentication -------------------------------------
     case("i", "backend/auth.py", "Register a farmer",
@@ -132,6 +141,38 @@ AUTOMATED = [
          ["test_simulate_node.py::test_offline_node_buffers_then_flushes_everything",
           "test_simulate_node.py::test_lost_response_is_resent_and_counted_as_duplicates",
           "test_simulate_node.py::test_only_confirmed_batches_leave_the_buffer"]),
+    case("ii", "backend/app.py", "Device upload in the ESP32's format",
+         "POST /readings with X-Device-Key: one reading, or a buffered list of {device_id, ts, temp_c, rh}",
+         "Stored in the same table as node uploads; last seen updated; the reply carries the risk level",
+         ["test_device_readings.py::test_a_single_reading_is_stored",
+          "test_device_readings.py::test_a_buffered_batch_is_stored",
+          "test_device_readings.py::test_last_seen_is_updated",
+          "test_device_readings.py::test_readings_reach_the_same_table_as_the_node_endpoint",
+          "test_device_readings.py::test_risk_level_comes_from_the_risk_layer"]),
+    case("ii", "backend/app.py", "Only a device's own key works",
+         "No key; a wrong key; an unknown device; another device's key",
+         "401 each time, with the same answer for an unknown device as for a wrong key; nothing stored",
+         ["test_device_readings.py::test_a_missing_key_is_refused",
+          "test_device_readings.py::test_a_wrong_key_is_refused_and_nothing_is_stored",
+          "test_device_readings.py::test_an_unknown_device_gets_the_same_answer_as_a_wrong_key",
+          "test_device_readings.py::test_a_key_works_only_for_its_own_device"]),
+    case("ii", "backend/app.py", "Device readings are checked one by one",
+         "Out-of-range values; the limits themselves; a clock 6 minutes and a few seconds fast; unknown fields",
+         "Bad rows rejected by position, the rest stored; limits accepted; a slightly fast clock tolerated",
+         ["test_device_readings.py::test_out_of_range_values_are_rejected_and_the_rest_stored",
+          "test_device_readings.py::test_the_limits_themselves_are_allowed",
+          "test_device_readings.py::test_more_than_5_minutes_in_the_future_is_rejected",
+          "test_device_readings.py::test_a_slightly_fast_clock_is_tolerated",
+          "test_device_readings.py::test_unknown_fields_are_rejected_not_ignored"]),
+    case("ii", "tools/register_device.py", "Register a device",
+         "register_device node-01 ...; the same ID again; a malformed ID",
+         "A 32-byte random key, printed once, stored only as a hash and accepted by POST /readings; "
+         "duplicates and malformed IDs refused",
+         ["test_register_device.py::test_a_device_is_registered_with_only_the_hash_of_its_key",
+          "test_register_device.py::test_the_key_is_32_random_bytes",
+          "test_register_device.py::test_the_issued_key_works_on_post_readings",
+          "test_register_device.py::test_a_duplicate_device_id_is_refused_and_nothing_changes",
+          "test_register_device.py::test_a_malformed_device_id_is_refused"]),
     # --- FR iii: risk computation -------------------------------------------------------
     case("iii", "backend/hutton.py", "Hutton day thresholds",
          "Days with tmin 10.0 / 9.99 °C and 6 / 5 hours at RH ≥ 90 %",
@@ -180,6 +221,21 @@ AUTOMATED = [
          "Risk 'unknown' and a sentence that says so",
          ["test_risk_job.py::test_dashboard_with_no_data_says_the_risk_is_unknown",
           "test_risk_job.py::test_unknown_risk_is_never_called_low"]),
+    case("iii", "backend/risk_job.py", "Two scoring runs at once",
+         "Two re-scores of one node at the same moment; a duplicate score row",
+         "One set of scores and one SMS; the database refuses the duplicate",
+         ["test_concurrent_rescore.py::test_two_simultaneous_runs_send_one_sms_and_write_one_set_of_scores",
+          "test_concurrent_rescore.py::test_the_database_refuses_a_duplicate_score"]),
+    case("iii", "backend/app.py", "Admin re-score now",
+         "POST /admin/nodes/{id}/rescore as admin, as a farmer, for an unknown node",
+         "Scores now and runs the SMS policy; 403 for a farmer; 404 for an unknown node",
+         ["test_seed_demo_event.py::test_rescore_scores_the_node_now_and_fires_the_alert",
+          "test_seed_demo_event.py::test_rescore_is_admin_only",
+          "test_seed_demo_event.py::test_rescore_of_an_unknown_node_is_404"]),
+    case("iii", "backend/risk_job.py", "One failing sensor does not stop the others",
+         "A run where the first node's scoring raises an error",
+         "The other nodes are scored; the failure is recorded in plain words for the admin",
+         ["test_status.py::test_one_failing_sensor_does_not_stop_the_others"]),
     # --- FR iv: leaf image capture and submission ----------------------------------------
     case("iv", "backend/cnn_service.py", "Upload a leaf photo",
          "POST /images with a farmer token and a JPEG (optional capture_date)",
@@ -205,6 +261,24 @@ AUTOMATED = [
          ["test_cnn_service.py::test_upload_needs_a_farmer_token",
           "test_cnn_service.py::test_oversized_upload_is_refused",
           "test_cnn_service.py::test_another_farmers_image_is_404_not_403"]),
+    case("iv", "backend/scan.py, app: scan_screen.dart", "Check one leaf from 1-3 photos",
+         "POST /scans with 3 photos of one leaf; with none; with 4. The app's Scan screen",
+         "3 photos: one diagnosis linked to the first photo, the others pointing to it; none / 4 refused; "
+         "the app asks for up to three guided photos and sends them in one request",
+         ["test_scan.py::test_three_photos_make_one_diagnosis",
+          "test_scan.py::test_a_scan_with_no_photo_is_refused",
+          "test_scan.py::test_more_than_three_photos_are_refused",
+          "app:screens_test.dart::Leaf check with several photos the scan screen asks for three photos and "
+          "waits for at least one",
+          "app:screens_test.dart::Leaf check with several photos the photos go to /scans in one request, in order"]),
+    case("iv", "backend/scan.py, app: scan_screen.dart", "A bad photo in a scan is named",
+         "3 photos, one too dark; 3 photos, two unusable",
+         "Nothing stored; every photo to retake listed with its reason; the app marks those slots",
+         ["test_scan.py::test_one_bad_photo_names_it_and_nothing_is_stored",
+          "test_scan.py::test_every_bad_photo_is_listed_at_once",
+          "app:screens_test.dart::Leaf check with several photos the photos to retake are known by position",
+          "app:screens_test.dart::Errors become plain sentences a rejected photo keeps the reason, so the app can "
+          "offer Retake"]),
     # --- FR v: CNN classification ----------------------------------------------------------
     case("v", "backend/cnn_service.py", "Preprocessing matches training",
          "Images of any mode, size and EXIF rotation",
@@ -229,6 +303,14 @@ AUTOMATED = [
          "API still runs; POST /images answers 503",
          ["test_cnn_service.py::test_upload_without_a_loaded_model_is_503",
           "test_cnn_service.py::test_missing_model_files_leave_the_classifier_unloaded"]),
+    case("v", "backend/scan.py", "Several photos of one leaf are averaged",
+         "1 photo; 3 photos (late blight, healthy, late blight); 2 healthy-looking and 1 late-blight-looking",
+         "1 photo unchanged; class probabilities averaged; one odd photo cannot decide alone",
+         ["test_scan.py::test_one_photo_is_unchanged",
+          "test_scan.py::test_the_photos_are_averaged",
+          "test_scan.py::test_one_odd_photo_cannot_decide_alone",
+          "app:screens_test.dart::Leaf check with several photos a scan reply carries each photo and whether "
+          "they agreed"]),
     # --- FR vi: fusion --------------------------------------------------------------------
     case("vi", "backend/fusion.py", "Risk moves the late-blight threshold",
          "r = 0.1, 0.5, 0.9; r far outside 0–1",
@@ -260,6 +342,17 @@ AUTOMATED = [
          "Summaries for every combination of label, flag and risk",
          "Suggests checking; never instructs to spray",
          ["test_fusion.py::test_summary_is_decision_support_never_an_instruction"]),
+    case("vi", "backend/scan.py", "Disagreeing photos are said in the result",
+         "A scan whose photos show different classes",
+         "The summary says how many photos showed what, and that the result is less certain",
+         ["test_scan.py::test_disagreement_is_said_in_words",
+          "test_scan.py::test_photos_that_disagree_are_averaged_and_flagged_in_the_summary"]),
+    case("vi", "app: diagnosis_screen.dart", "The app explains the fusion",
+         "Diagnoses at high risk, at low risk, and with no weather data",
+         "How the risk lowered or raised the bar, in words; no data shown as unknown risk",
+         ["app:screens_test.dart::Diagnosis explains how high risk lowered the bar",
+          "app:screens_test.dart::Diagnosis explains how low risk raised the bar and the leaf was not flagged",
+          "app:screens_test.dart::Diagnosis no weather data is shown as unknown risk, and says so"]),
     # --- FR vii: SMS ------------------------------------------------------------------------
     case("vii", "backend/alerts.py", "High-risk SMS when the risk turns high",
          "Judged level medium → high; high → high",
@@ -300,6 +393,12 @@ AUTOMATED = [
          "delivery_status updated; token checked when configured",
          ["test_alerts.py::test_delivery_report_updates_the_status",
           "test_alerts.py::test_delivery_report_token_is_checked_when_configured"]),
+    case("vii", "backend/alerts.py", "Undelivered SMS are recognised and recorded",
+         "Each delivery status; a send refused by Africa's Talking; a delivery report 'Failed'",
+         "error / Failed / Rejected / InvalidPhoneNumber count as not delivered; each recorded for the admin",
+         ["test_status.py::test_which_delivery_statuses_mean_the_farmer_did_not_get_it",
+          "test_status.py::test_an_sms_that_could_not_be_sent_is_recorded",
+          "test_status.py::test_an_sms_reported_undelivered_is_recorded"]),
     # --- FR viii: history -------------------------------------------------------------------
     case("viii", "backend/dashboard.py", "History newest first, gaps shown",
          "GET /nodes/{id}/history?days=10 with days that have no readings",
@@ -320,6 +419,87 @@ AUTOMATED = [
          "Farmer A asks for farmer B's history",
          "404",
          ["test_risk_job.py::test_history_of_another_farmers_node_is_404"]),
+    case("viii", "backend/dashboard.py, app: history_screen.dart", "The app's history reads plainly",
+         "History with a multi-photo check, gaps and SMS",
+         "Newest first, each day led by its weather risk, gaps shown; a check says how many photos it used",
+         ["test_scan.py::test_history_says_how_many_photos_a_check_used",
+          "app:screens_test.dart::History newest first, each day led by its weather risk",
+          "app:screens_test.dart::History gaps are shown, not hidden",
+          "app:screens_test.dart::History photos and SMS read plainly"]),
+    case("viii", "app: trend_chart.dart", "Trend: the model's forecasts against what happened",
+         "30 days of measured Hutton scores and 24 h forecasts, with gaps",
+         "Each forecast on the day it was about; tomorrow last; the server's bands; gaps kept; sentences on "
+         "direction, blight days, tomorrow and how often the forecast matched",
+         ["test_risk_job.py::test_history_is_newest_first_with_gaps_shown",
+          "app:screens_test.dart::Trend each forecast sits on the day it was about, and tomorrow ends the chart",
+          "app:screens_test.dart::Trend bands come from the server",
+          "app:screens_test.dart::Trend summary: direction, blight days, tomorrow, and how the forecasts did",
+          "app:screens_test.dart::Trend gaps stay gaps, and too little data says so instead of guessing",
+          "app:screens_test.dart::Trend the card draws the chart, the key and the sentences"]),
+    # --- NFR: security, reliability, error reporting, maintainability --------------------
+    case("NFR", "backend/app.py", "Every error has one shape",
+         "A 404, a validation error, a missing login, an endpoint's own reason; an error the app has no wording for",
+         "FastAPI's detail kept, plus error {code, message}; the app shows the server's sentence",
+         ["test_status.py::test_every_error_has_a_code_and_a_plain_message",
+          "test_status.py::test_an_endpoints_own_reason_becomes_the_code",
+          "app:screens_test.dart::Readable errors and status any other error uses the server's plain sentence"]),
+    case("NFR", "backend/events.py", "Problems are recorded for the admin",
+         "An unexpected error; the same problem every hour; the log itself failing; old routine rows",
+         "A plain 500 with the problem recorded; one record per quiet period; the caller never breaks; "
+         "routine rows pruned, problems kept",
+         ["test_status.py::test_an_unexpected_error_is_recorded_and_answered_plainly",
+          "test_status.py::test_an_event_is_stored_in_plain_words",
+          "test_status.py::test_a_problem_that_persists_is_reported_once_per_quiet_period",
+          "test_status.py::test_recording_never_breaks_the_caller",
+          "test_status.py::test_old_routine_rows_are_pruned_but_problems_kept"]),
+    case("NFR", "backend/status.py, app: status_screen.dart", "Admin status page",
+         "GET /admin/status as admin, as a farmer, without login; after a failed run; with the model missing",
+         "Each part ok / warning / error with a sentence, sensors, recent problems; 403 / 401 otherwise; "
+         "reading it writes nothing; the app reads it",
+         ["test_status.py::test_status_is_for_admins_only",
+          "test_status.py::test_status_names_each_part_and_the_recent_problems",
+          "test_status.py::test_a_failed_run_and_a_missing_leaf_checker_are_errors",
+          "test_status.py::test_reading_the_status_never_writes_anything",
+          "test_status.py::test_each_run_leaves_a_record_for_the_status_page",
+          "app:screens_test.dart::Readable errors and status the system status is read part by part",
+          "app:screens_test.dart::Readable errors and status an admin is recognised, and an older server means "
+          "a farmer"]),
+    case("NFR", "backend/status.py, app: dashboard_screen.dart", "Farmer warnings",
+         "A sensor never seen / quiet for 5 h; an undelivered SMS; the leaf checker down; all well",
+         "Only what affects this farmer, with what to check; nothing when all is well",
+         ["test_status.py::test_no_warnings_when_all_is_well",
+          "test_status.py::test_a_quiet_sensor_says_for_how_long_and_what_to_check",
+          "test_status.py::test_an_undelivered_sms_and_a_missing_leaf_checker_are_shown",
+          "test_status.py::test_the_dashboard_carries_the_warnings",
+          "app:screens_test.dart::Readable errors and status dashboard warnings are read, and a server without "
+          "them means none",
+          "app:screens_test.dart::Readable errors and status a warning reads plainly, with an icon"]),
+    case("NFR", "app: api.dart", "The app never crashes on a bad connection",
+         "No network; a broken (non-JSON) reply; the model missing; a file too large",
+         "A plain sentence each time; no exception escapes",
+         ["app:screens_test.dart::Errors become plain sentences no network never escapes as a crash",
+          "app:screens_test.dart::Errors become plain sentences a broken reply (not JSON) is still a friendly message",
+          "app:screens_test.dart::Errors become plain sentences model missing and file too large"]),
+    case("NFR", "app: api.dart", "The app talks HTTPS",
+         "The app's default server address",
+         "https://blight-ews-api.onrender.com",
+         ["app:screens_test.dart::by default the app talks to the hosted server over HTTPS"]),
+    case("NFR", "app: update.dart, tools/set_app_signing_secrets.py", "App updates without the Play Store",
+         "version.json with a newer, the same and an older build; no answer; a PC build; the signing key",
+         "Only a newer build is offered; a failed check shows nothing; PC builds never ask; the key reaches "
+         "the release workflow intact",
+         ["app:screens_test.dart::App updates a newer build on GitHub is offered",
+          "app:screens_test.dart::App updates the same or an older build is not",
+          "app:screens_test.dart::App updates no answer, or a broken one, just means no banner",
+          "app:screens_test.dart::App updates a build made on the PC never asks",
+          "app:screens_test.dart::App updates the strip names the build and can be closed",
+          "test_set_app_signing_secrets.py::test_the_three_secrets_come_from_key_properties_and_the_keystore",
+          "test_set_app_signing_secrets.py::test_a_key_the_workflow_cannot_use_is_refused"]),
+    case("NFR", "backend/app.py", "Health check",
+         "GET /health with the database up and down",
+         "200 ok; 503 when the database is unreachable",
+         ["test_app.py::test_health_ok_when_database_reachable",
+          "test_app.py::test_health_503_when_database_unreachable"]),
 ]
 
 
@@ -331,6 +511,56 @@ def run_pytest(junit_path: Path) -> int:
     command = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", f"--junitxml={junit_path}"]
     print("Running the test suite: " + " ".join(command[1:]))
     return subprocess.run(command, cwd=REPO_ROOT).returncode
+
+
+def run_flutter() -> list[str] | None:
+    """Run the whole app suite once (flutter test --machine). Its JSON lines, or None without Flutter."""
+    flutter = shutil.which("flutter")
+    if flutter is None:
+        print("Flutter not found: app tests not run")
+        return None
+    print("Running the app tests: flutter test --machine")
+    result = subprocess.run([flutter, "test", "--machine"], cwd=APP_DIR, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
+    return result.stdout.splitlines()
+
+
+def read_flutter_machine(lines: list[str]) -> tuple[dict, dict]:
+    """({"app:<file>::<full name>": (outcome, message)}, summary) from `flutter test --machine` output.
+
+    A test's full name is its groups' names and its own, joined by spaces, as Flutter reports it.
+    Hidden entries (the "loading <file>" steps) are not tests and are left out.
+    """
+    suites, tests, errors, results = {}, {}, {}, {}
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue  # Flutter's own progress lines
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        if kind == "suite":
+            suites[event["suite"]["id"]] = Path(event["suite"]["path"]).name
+        elif kind == "testStart":
+            test = event["test"]
+            tests[test["id"]] = f"{APP_PREFIX}{suites.get(test['suiteID'], '?')}::{test['name']}"
+        elif kind == "error":
+            errors.setdefault(event["testID"], str(event.get("error", "")).splitlines()[0][:150])
+        elif kind == "testDone" and not event.get("hidden"):
+            key = tests.get(event["testID"])
+            if key is None:
+                continue
+            if event.get("skipped"):
+                results[key] = ("skipped", "")
+            elif event.get("result") == "success":
+                results[key] = ("passed", "")
+            else:
+                results[key] = ("failed", errors.get(event["testID"], event.get("result", "")))
+    outcomes = [o for o, _ in results.values()]
+    summary = {"total": len(outcomes), "passed": outcomes.count("passed"), "failed": outcomes.count("failed"),
+               "skipped": outcomes.count("skipped")}
+    return results, summary
 
 
 def read_junit(path: Path) -> dict:
@@ -396,20 +626,31 @@ def _cell(text: str) -> str:
     return str(text).replace("|", "\\|").replace("\n", " ")
 
 
-def render(automated: list[dict], manual: list[dict], summary: dict, ran_at: datetime) -> str:
+def heading(fr: str) -> str:
+    return f"NFR: {FRS[fr]}" if fr == "NFR" else f"FR {fr}: {FRS[fr]}"
+
+
+def render(automated: list[dict], manual: list[dict], summary: dict, ran_at: datetime,
+           app_summary: dict | None = None) -> str:
+    app_line = ("- App suite (`flutter test`): not run." if app_summary is None else
+                f"- App suite (`flutter test`): **{app_summary['passed']} passed, {app_summary['failed']} failed, "
+                f"{app_summary['skipped']} skipped** of {app_summary['total']} tests.")
     lines = [
-        "# Functional test plan (FR i–viii)",
+        "# Test plan (FR i–viii and non-functional)",
         "",
         "Generated by `ml/make_test_plan.py`. Automated rows (T-) are filled in from a real run of the whole "
-        "pytest suite; a row passes only if every test it names passed. Manual rows (M-) come from "
-        "`docs/manual_app_checklist.csv`, filled in by hand after each check on the phone.",
+        "backend suite (pytest) and the whole app suite (flutter test); a row passes only if every test it names "
+        "passed. Manual rows (M-) come from `docs/manual_app_checklist.csv`, filled in by hand after each check "
+        "on the phone or the node; a check not yet done is Pending, never Pass.",
         "",
-        f"- Suite run: {ran_at:%Y-%m-%d %H:%M UTC}: **{summary['passed']} passed, {summary['failed']} failed, "
-        f"{summary['skipped']} skipped** of {summary['total']} tests, {summary['seconds']:.0f} s.",
+        f"- Backend suite (pytest), run {ran_at:%Y-%m-%d %H:%M UTC}: **{summary['passed']} passed, "
+        f"{summary['failed']} failed, {summary['skipped']} skipped** of {summary['total']} tests, "
+        f"{summary['seconds']:.0f} s.",
+        app_line,
         "",
         "## Summary by requirement",
         "",
-        "| FR | Requirement | Automated rows (pass) | Tests named | Manual rows (pass / pending) |",
+        "| FR | Requirement | Automated rows (pass) | Tests named | Manual rows (pass / fail / pending) |",
         "|---|---|---|---|---|",
     ]
     for fr, name in FRS.items():
@@ -418,10 +659,10 @@ def render(automated: list[dict], manual: list[dict], summary: dict, ran_at: dat
         lines.append(
             f"| {fr} | {name} | {len(auto)} ({sum(r['result'] == 'Pass' for r in auto)}) | "
             f"{sum(len(r['tests']) for r in auto)} | {len(man)} ({sum(r['Pass/Fail'] == 'Pass' for r in man)} / "
-            f"{sum(r['Pass/Fail'] == 'Pending' for r in man)}) |")
+            f"{sum(r['Pass/Fail'] == 'Fail' for r in man)} / {sum(r['Pass/Fail'] == 'Pending' for r in man)}) |")
     header = ["| ID | Module | Test case | Input | Expected | Actual | Pass/Fail |", "|---|---|---|---|---|---|---|"]
-    for fr, name in FRS.items():
-        lines += ["", f"## FR {fr}: {name}", "", *header]
+    for fr in FRS:
+        lines += ["", f"## {heading(fr)}", "", *header]
         for r in automated:
             if r["fr"] == fr:
                 lines.append(f"| {r['id']} | {_cell(r['module'])} | {_cell(r['case'])} | {_cell(r['input'])} | "
@@ -432,7 +673,7 @@ def render(automated: list[dict], manual: list[dict], summary: dict, ran_at: dat
                              f"{_cell(r['Expected'])} | {_cell(r['Actual'])} | **{r['Pass/Fail']}** |")
     others = [r for r in manual if r["FR"] not in FRS]
     if others:
-        lines += ["", "## Non-functional checks on the app", "", *header]
+        lines += ["", "## Other checks", "", *header]
         lines += [f"| {r['ID']} | {_cell(r['Module'])} | {_cell(r['Test case'])} | {_cell(r['Input'])} | "
                   f"{_cell(r['Expected'])} | {_cell(r['Actual'])} | **{r['Pass/Fail']}** |" for r in others]
     lines += [
@@ -456,6 +697,7 @@ def build(results: dict) -> list[dict]:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Run pytest and write docs/test_plan.md.")
     parser.add_argument("--junit", type=Path, help="use this JUnit XML instead of running pytest")
+    parser.add_argument("--no-app", action="store_true", help="do not run the app tests (their rows fail)")
     args = parser.parse_args(argv)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -468,19 +710,29 @@ def main(argv=None) -> int:
             return 1
         results, summary = read_junit(junit), suite_summary(junit)
 
+    app_summary = None
+    lines = None if args.no_app else run_flutter()
+    if lines is not None:
+        app_results, app_summary = read_flutter_machine(lines)
+        results = {**results, **app_results}
+
     automated = build(results)
     manual = read_manual()
-    REPORT.write_text(render(automated, manual, summary, datetime.now(UTC)), encoding="utf-8")
+    REPORT.write_text(render(automated, manual, summary, datetime.now(UTC), app_summary), encoding="utf-8")
 
     failed = [r["id"] for r in automated if r["result"] != "Pass"]
-    print(f"\nSuite: {summary['passed']} passed, {summary['failed']} failed, {summary['skipped']} skipped")
+    print(f"\nBackend suite: {summary['passed']} passed, {summary['failed']} failed, {summary['skipped']} skipped")
+    if app_summary is not None:
+        print(f"App suite: {app_summary['passed']} passed, {app_summary['failed']} failed, "
+              f"{app_summary['skipped']} skipped")
     print(f"Automated rows: {len(automated) - len(failed)}/{len(automated)} pass"
           + (f" (failing: {', '.join(failed)})" if failed else ""))
     print(f"Manual rows: {sum(r['Pass/Fail'] == 'Pass' for r in manual)} pass, "
           f"{sum(r['Pass/Fail'] == 'Fail' for r in manual)} fail, "
           f"{sum(r['Pass/Fail'] == 'Pending' for r in manual)} pending (fill in {MANUAL_CHECKLIST.name})")
     print(f"Wrote {REPORT.relative_to(REPO_ROOT)}")
-    return 0 if not failed and summary["failed"] == 0 else 1
+    app_failed = app_summary is not None and app_summary["failed"] > 0
+    return 0 if not failed and summary["failed"] == 0 and not app_failed else 1
 
 
 if __name__ == "__main__":
