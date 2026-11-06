@@ -1,4 +1,4 @@
-"""ORM models: the 10 tables described in the project README.
+"""ORM models: the 11 tables described in the project README.
 
 Conventions used throughout:
 - Primary keys are prefixed strings from backend.ids (e.g. FRM-..., RD-...).
@@ -73,7 +73,8 @@ class SensorNode(Base):
     longitude: Mapped[float] = mapped_column(Float)
     # Null until the node sends its first reading.
     last_sync_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # bcrypt hash of the node's own API key, which it sends as X-Node-Key.
+    # bcrypt hash of the node's own API key, which it sends as X-Device-Key
+    # (POST /readings) or X-Node-Key (POST /nodes/{node_id}/readings).
     # Only the hash is stored, so a database dump does not hand over the key.
     # Null for a node that has not been issued a key yet.
     api_key_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
