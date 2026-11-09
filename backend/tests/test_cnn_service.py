@@ -206,6 +206,32 @@ def test_a_mostly_brown_blighted_leaf_is_still_a_leaf():
     assert measured["green_fraction"] >= cnn_service.LEAF_GREEN_MIN_FRACTION
 
 
+def half_and_half(left_rgb, right_rgb, seed=3):
+    """A photo whose left half is one colour and right half another, with sensor noise."""
+    pixels = np.asarray(covered_lens(left_rgb, seed=seed)).copy()
+    pixels[:, 200:] = np.asarray(covered_lens(right_rgb, seed=seed + 1))[:, 200:]
+    return Image.fromarray(pixels)
+
+
+def test_a_finger_over_half_the_lens_is_refused():
+    """Edgar's phone, 9 Nov: a finger over half the photo left enough leaf green to pass not_a_leaf."""
+    with pytest.raises(cnn_service.ImageRejected) as error:
+        cnn_service.check_quality(half_and_half((70, 130, 50), (220, 140, 120)))
+    assert error.value.reason == cnn_service.PARTLY_COVERED
+    assert "covering part of the photo" in error.value.message
+
+
+def test_a_leaf_on_a_pale_pink_backdrop_is_not_skin():
+    """PlantVillage photographs some leaves on a pinkish-tan board: pale, so not taken for a finger."""
+    measured = cnn_service.check_quality(half_and_half((70, 130, 50), (200, 170, 160)))
+    assert measured["skin_fraction"] < cnn_service.SKIN_MAX_FRACTION
+
+
+def test_the_random_test_leaves_are_not_skin():
+    for seed in range(5):
+        assert cnn_service.skin_fraction(leaf_like(seed=seed)) < cnn_service.SKIN_MAX_FRACTION
+
+
 def test_plantvillage_images_pass_the_quality_check():
     folder = REPO_ROOT / "data" / "plantvillage_potato"
     for path in [*sorted(folder.rglob("*.jpg"))[::50]]:

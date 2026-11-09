@@ -65,6 +65,16 @@ BLUR_LAPLACIAN_VAR_THRESHOLD = 50.0  # variance of the Laplacian below this: too
 LEAF_GREEN_MIN_FRACTION = 0.05
 LEAF_HUE_DEGREES = (35.0, 170.0)
 LEAF_MIN_SATURATION, LEAF_MIN_VALUE = 0.15, 0.12
+# Is something covering PART of the photo? A finger over half the lens leaves plenty of leaf green
+# (Edgar's phone, 9 Nov 2026: 37 % green), so the check above passes it. Skin in front of the lens
+# is a bright, fairly saturated pink-red: hue up to 20 or from 345 degrees, saturation 0.35-0.80,
+# brightness at least 0.55. Calibrated 9 Nov 2026: that photo scored 0.238; the 2,152 PlantVillage
+# images at most 0.003 (their pale pink backdrops are not saturated enough, and blight lesions are
+# darker); the farm photos at most 0.006. Refusing from 0.10 keeps a wide margin on both sides.
+SKIN_MAX_FRACTION = 0.10
+SKIN_HUE_DEGREES = (20.0, 345.0)  # hue <= first or >= second
+SKIN_SATURATION = (0.35, 0.80)
+SKIN_MIN_VALUE = 0.55
 
 
 # --- rejections the app can act on --------------------------------------
@@ -84,6 +94,7 @@ TOO_SMALL = "too_small"
 TOO_DARK = "too_dark"
 TOO_BLURRY = "too_blurry"
 NOT_A_LEAF = "not_a_leaf"
+PARTLY_COVERED = "partly_covered"
 
 
 def load_image(image_bytes: bytes) -> Image.Image:
@@ -174,21 +185,44 @@ def check_quality(image: Image.Image) -> dict:
             "filling the frame, with nothing covering the camera.",
         )
 
-    return {"brightness": brightness, "sharpness": sharpness, "green_fraction": green}
+    skin = skin_fraction(image)
+    if skin >= SKIN_MAX_FRACTION:
+        raise ImageRejected(
+            PARTLY_COVERED,
+            "Something is covering part of the photo, such as a finger. Please keep your "
+            "fingers away from the camera and retake it.",
+        )
+
+    return {"brightness": brightness, "sharpness": sharpness, "green_fraction": green, "skin_fraction": skin}
 
 
-def leaf_green_fraction(image: Image.Image) -> float:
-    """Share of pixels in the leaf-green band, as the model sees the photo (224x224)."""
+def _model_hsv(image: Image.Image) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Hue in degrees, saturation and value in 0-1, as the model sees the photo (224x224)."""
     hsv = np.asarray(
         image.convert("RGB").resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.BILINEAR).convert("HSV"),
         dtype=np.float32,
     )
-    hue = hsv[..., 0] * (360.0 / 255.0)
+    return hsv[..., 0] * (360.0 / 255.0), hsv[..., 1] / 255.0, hsv[..., 2] / 255.0
+
+
+def leaf_green_fraction(image: Image.Image) -> float:
+    """Share of pixels in the leaf-green band."""
+    hue, sat, val = _model_hsv(image)
     green = (
         (hue >= LEAF_HUE_DEGREES[0]) & (hue <= LEAF_HUE_DEGREES[1])
-        & (hsv[..., 1] / 255.0 >= LEAF_MIN_SATURATION) & (hsv[..., 2] / 255.0 >= LEAF_MIN_VALUE)
+        & (sat >= LEAF_MIN_SATURATION) & (val >= LEAF_MIN_VALUE)
     )
     return float(green.mean())
+
+
+def skin_fraction(image: Image.Image) -> float:
+    """Share of pixels that look like skin in front of the lens (bright, saturated pink-red)."""
+    hue, sat, val = _model_hsv(image)
+    skin = (
+        ((hue <= SKIN_HUE_DEGREES[0]) | (hue >= SKIN_HUE_DEGREES[1]))
+        & (sat >= SKIN_SATURATION[0]) & (sat <= SKIN_SATURATION[1]) & (val >= SKIN_MIN_VALUE)
+    )
+    return float(skin.mean())
 
 
 # --- preprocessing --------------------------------------------------------
