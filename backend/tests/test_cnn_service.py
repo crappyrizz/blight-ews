@@ -183,6 +183,29 @@ def test_laplacian_variance_is_zero_for_a_flat_image():
 
 @pytest.mark.skipif(not (REPO_ROOT / "data" / "plantvillage_potato").exists(),
                     reason="PlantVillage images are local only (gitignored)")
+def covered_lens(rgb, seed=0):
+    """A finger over the lens: one skin colour with sensor noise (sharp and bright enough to pass)."""
+    noise = np.random.default_rng(seed).normal(0, 12, (400, 400, 3))
+    return Image.fromarray(np.clip(np.array(rgb) + noise, 0, 255).astype(np.uint8))
+
+
+@pytest.mark.parametrize("rgb", [(200, 90, 60), (220, 150, 140), (90, 30, 25)])
+def test_a_finger_over_the_lens_is_not_a_leaf(rgb):
+    """Defect D-01 (manual check M-08): it passed the brightness and sharpness checks and was classified."""
+    with pytest.raises(cnn_service.ImageRejected) as error:
+        cnn_service.check_quality(covered_lens(rgb))
+    assert error.value.reason == cnn_service.NOT_A_LEAF
+    assert "does not show a leaf" in error.value.message
+
+
+def test_a_mostly_brown_blighted_leaf_is_still_a_leaf():
+    """The worst real leaf in the dataset is about 12 % green; this one is 20 % green, 80 % blight-brown."""
+    pixels = np.asarray(covered_lens((110, 80, 55), seed=1)).copy()
+    pixels[:, :80] = np.asarray(covered_lens((70, 130, 50), seed=2))[:, :80]
+    measured = cnn_service.check_quality(Image.fromarray(pixels))
+    assert measured["green_fraction"] >= cnn_service.LEAF_GREEN_MIN_FRACTION
+
+
 def test_plantvillage_images_pass_the_quality_check():
     folder = REPO_ROOT / "data" / "plantvillage_potato"
     for path in [*sorted(folder.rglob("*.jpg"))[::50]]:

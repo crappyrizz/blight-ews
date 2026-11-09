@@ -138,11 +138,23 @@ def test_an_app_row_fails_when_its_app_test_failed_or_did_not_run():
     assert result == "Fail" and "not found" in actual  # --no-app: app rows never pass unrun
 
 
-def test_every_requirement_has_automated_and_manual_rows():
+def test_every_requirement_has_evidence_and_every_function_an_automated_test():
+    """Each requirement has at least one row; each functional one (FR-xx) an automated test.
+
+    Some requirements cannot be answered by an automated test (NFR-03 performance is measured,
+    NFR-04 usability comes from the farmer), so they need a manual row instead.
+    """
     manual = tp.read_manual()
     for fr in tp.FRS:
-        assert any(r["fr"] == fr for r in tp.AUTOMATED), f"FR {fr} has no automated row"
-        assert any(r["FR"] == fr for r in manual), f"FR {fr} has no manual check"
+        automated = any(r["fr"] == fr for r in tp.AUTOMATED)
+        assert automated or any(r["FR"] == fr for r in manual), f"{fr} has no test or check at all"
+        if fr.startswith("FR-"):
+            assert automated, f"{fr} has no automated row"
+
+
+def test_rows_use_only_the_reports_requirement_ids():
+    assert {r["fr"] for r in tp.AUTOMATED} <= set(tp.FRS)
+    assert {r["FR"] for r in tp.read_manual()} <= set(tp.FRS)
 
 
 def test_manual_checks_not_done_are_pending_never_pass(tmp_path):
@@ -150,9 +162,9 @@ def test_manual_checks_not_done_are_pending_never_pass(tmp_path):
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=tp.MANUAL_COLUMNS)
         writer.writeheader()
-        writer.writerow({"ID": "M-01", "FR": "i", "Actual": "", "Pass/Fail": ""})
-        writer.writerow({"ID": "M-02", "FR": "i", "Actual": "Worked", "Pass/Fail": "pass"})
-        writer.writerow({"ID": "M-03", "FR": "i", "Actual": "Odd", "Pass/Fail": "maybe"})
+        writer.writerow({"ID": "M-01", "FR": "FR-01", "Actual": "", "Pass/Fail": ""})
+        writer.writerow({"ID": "M-02", "FR": "FR-01", "Actual": "Worked", "Pass/Fail": "pass"})
+        writer.writerow({"ID": "M-03", "FR": "FR-01", "Actual": "Odd", "Pass/Fail": "maybe"})
     rows = tp.read_manual(path)
     assert [(r["Actual"], r["Pass/Fail"]) for r in rows] == [
         ("Not run yet", "Pending"), ("Worked", "Pass"), ("Odd", "Pending")]

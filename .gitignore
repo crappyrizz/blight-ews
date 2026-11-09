@@ -76,3 +76,6 @@ skills-lock.json
 # Firmware secrets (Wi-Fi, device keys): firmware/<sketch>/secrets.example.h shows the format
 firmware/**/secrets*.h
 !firmware/**/secrets.example.h
+
+# Report diagrams (sources and renders): they go into the Word report, not the repo
+docs/diagrams/

@@ -57,6 +57,14 @@ IMAGE_SIZE = 224  # the model's input is IMAGE_SIZE x IMAGE_SIZE x 3
 MIN_SHORT_SIDE_PX = 224  # smaller and the model would be looking at an upscaled guess
 DARK_MEAN_THRESHOLD = 40.0  # mean grey level below this: too dark
 BLUR_LAPLACIAN_VAR_THRESHOLD = 50.0  # variance of the Laplacian below this: too blurry
+# Is it a leaf at all? The share of pixels in the leaf-green band (hue 35-170 degrees, saturation
+# and brightness at least 0.15 and 0.12), measured at 224x224 (defect D-01: a finger over the lens
+# was classified as if it were a leaf). Calibrated 9 Nov 2026: the 2,152 PlantVillage images score
+# at least 0.118 (a badly blighted late-blight leaf; medians 0.43-0.52); the farm photos 0.53-0.95;
+# a finger over the lens 0.000 in every lighting tried, a grey wall 0.001, bare soil 0.09.
+LEAF_GREEN_MIN_FRACTION = 0.05
+LEAF_HUE_DEGREES = (35.0, 170.0)
+LEAF_MIN_SATURATION, LEAF_MIN_VALUE = 0.15, 0.12
 
 
 # --- rejections the app can act on --------------------------------------
@@ -75,6 +83,7 @@ UNREADABLE = "unreadable"
 TOO_SMALL = "too_small"
 TOO_DARK = "too_dark"
 TOO_BLURRY = "too_blurry"
+NOT_A_LEAF = "not_a_leaf"
 
 
 def load_image(image_bytes: bytes) -> Image.Image:
@@ -157,7 +166,29 @@ def check_quality(image: Image.Image) -> dict:
             "focus, then retake it.",
         )
 
-    return {"brightness": brightness, "sharpness": sharpness}
+    green = leaf_green_fraction(image)
+    if green < LEAF_GREEN_MIN_FRACTION:
+        raise ImageRejected(
+            NOT_A_LEAF,
+            "This photo does not show a leaf. Please photograph one potato leaf, "
+            "filling the frame, with nothing covering the camera.",
+        )
+
+    return {"brightness": brightness, "sharpness": sharpness, "green_fraction": green}
+
+
+def leaf_green_fraction(image: Image.Image) -> float:
+    """Share of pixels in the leaf-green band, as the model sees the photo (224x224)."""
+    hsv = np.asarray(
+        image.convert("RGB").resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.BILINEAR).convert("HSV"),
+        dtype=np.float32,
+    )
+    hue = hsv[..., 0] * (360.0 / 255.0)
+    green = (
+        (hue >= LEAF_HUE_DEGREES[0]) & (hue <= LEAF_HUE_DEGREES[1])
+        & (hsv[..., 1] / 255.0 >= LEAF_MIN_SATURATION) & (hsv[..., 2] / 255.0 >= LEAF_MIN_VALUE)
+    )
+    return float(green.mean())
 
 
 # --- preprocessing --------------------------------------------------------

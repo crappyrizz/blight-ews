@@ -47,6 +47,45 @@
     ]
   },
   "field": {
-    "n": 0
+    "n": 2,
+    "accuracy": 0.5,
+    "macro_f1": 0.5,
+    "per_class": {
+      "early_blight": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "support": 1
+      },
+      "healthy": {
+        "precision": null,
+        "recall": 0.0,
+        "f1": null,
+        "support": 1
+      },
+      "late_blight": {
+        "precision": 0.0,
+        "recall": null,
+        "f1": null,
+        "support": 0
+      }
+    },
+    "confusion_matrix": [
+      [
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        0
+      ]
+    ]
   }
 }
